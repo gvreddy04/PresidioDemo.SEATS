@@ -123,7 +123,7 @@ internal static class JsonRoundTripExamples
                     {
                         "FirstName" => JsonSerializer.Serialize(person.Value.First),
                         "LastName" => JsonSerializer.Serialize(person.Value.Last),
-                        "BookedAsName" => JsonSerializer.Serialize(person.Value.Last + "/" + person.Value.First),
+                        "BookedAsName" => JsonSerializer.Serialize(person.Value.Last.ToUpperInvariant() + "/" + person.Value.First.ToUpperInvariant()),
                         _ => null
                     };
                 }

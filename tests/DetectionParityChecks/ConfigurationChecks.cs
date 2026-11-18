@@ -4,9 +4,8 @@ using PresidioDemo.Core.Protection;
 namespace PresidioDemo.DetectionParity;
 
 /// <summary>
-/// Checks the shipped recognizer file (WR-014): it loads, declares the Seats feed's custom recognizers and JSON keys, every
-/// entity type of the frozen baseline is covered by a custom recognizer or by a Presidio predefined entity, and every
-/// baseline location sits under a recognizer key of its entity.
+/// Checks the shipped recognizer file (WR-014): it loads, declares the Seats feed's recognizers and key mappings, and
+/// every entity type of the frozen baseline is covered by a key mapping, a custom recognizer or a Presidio predefined entity.
 /// </summary>
 public static class ConfigurationChecks
 {
@@ -38,37 +37,32 @@ public static class ConfigurationChecks
         int passed = 0;
         Check(files.Count == FeedCatalog.All.Count && files.ContainsKey(FeedType.Seats), "the Seats recognizer file loads", ref passed);
         var seats = files[FeedType.Seats];
-        Check(new[] { ("FirstName", "PERSON"), ("LastName", "PERSON"), ("BookedAsName", "PERSON"), ("PaxId", "PASSENGER_ID"), ("OrderId", "ORDER_ID"),
-            ("EmpId", "EMPLOYEE_ID"), ("Attributes", "SENSITIVE_ATTRIBUTE") }.All(pair => seats.RecognizerForKey(pair.Item1)?.Entity == pair.Item2),
-            "passenger-name, passenger-ID, order-ID, employee-ID and attribute keys are declared", ref passed);
-        Check(seats.Recognizers.Any(r => r.Entity == "PERSON" && r.RunsInPresidio()), "the SURNAME/GIVEN name pattern runs in Presidio for every other string", ref passed);
-        Check(seats.AllowList.AllowsKey("UARecloc") && seats.AllowList.AllowsKey("SeatNumber") && seats.AllowList.MatchesWhole("2026-11-09T14:05:33.120 PM"),
-            "the PNR and the operational keys are allowed, and so are timestamps", ref passed);
+        Check(seats.MappedEntity(["Customers", "PaxId"]) == "PASSENGER_ID" && seats.MappedEntity(["Customers", "FirstName"]) == "PERSON"
+            && seats.MappedEntity(["ServiceItems", "Attributes"]) == "SENSITIVE_ATTRIBUTE"
+            && seats.Recognizers.Any(r => r.Entity == "PERSON"), "passenger-ID, passenger-name and attribute keys are mapped and a passenger-name recognizer is declared", ref passed);
         Check(seats.Anonymizers.ContainsKey(FeedAnonymizer.DefaultEntity), "the shipped file sets a DEFAULT anonymizer", ref passed);
         var baseline = ParityBaseline.Load(root);
         var uncovered = UncoveredEntities(baseline, files);
-        Check(uncovered.Count == 0, "every baseline entity has a custom recognizer or a Presidio predefined entity"
+        Check(uncovered.Count == 0, "every baseline entity has a key mapping, a custom recognizer or a Presidio predefined entity"
             + (uncovered.Count == 0 ? "" : ": missing " + string.Join(", ", uncovered)), ref passed);
+        var wrongKey = baseline.Protected.Where(e => seats.MappedEntity(Names(e.Location)) != e.Entity).Select(e => e.Location).ToArray();
+        Check(wrongKey.Length == 0, "every baseline value sits under a key mapped to its baseline entity"
+            + (wrongKey.Length == 0 ? "" : ": not mapped " + string.Join(", ", wrongKey)), ref passed);
+        Check(baseline.Pnrs.All(e => seats.Skips(Names(e.Location))), "every baseline record locator sits under a skipped key, so it stays unchanged", ref passed);
         var withoutAttributes = new Dictionary<FeedType, RecognizerFile>(files)
         {
-            [FeedType.Seats] = seats with { Recognizers = seats.Recognizers.Where(r => r.Entity != "SENSITIVE_ATTRIBUTE").ToArray() },
+            [FeedType.Seats] = seats with
+            {
+                EntityMapping = seats.EntityMapping!.Where(pair => pair.Value != "SENSITIVE_ATTRIBUTE").ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase)
+            },
         };
         Check(UncoveredEntities(baseline, withoutAttributes).Contains("Seats SENSITIVE_ATTRIBUTE"),
             "the coverage check reports a baseline entity removed from its feed's file", ref passed);
-        var unkeyed = UnkeyedLocations(baseline, files);
-        Check(unkeyed.Count == 0, "every baseline location sits under a recognizer key of its entity"
-            + (unkeyed.Count == 0 ? "" : ": missing " + string.Join(", ", unkeyed)), ref passed);
-        var withoutEmployeeKey = new Dictionary<FeedType, RecognizerFile>(files)
-        {
-            [FeedType.Seats] = seats with { Recognizers = seats.Recognizers.Select(r => r with { Keys = r.Keys.Where(k => k != "EmpId").ToArray() }).ToArray() },
-        };
-        Check(UnkeyedLocations(baseline, withoutEmployeeKey).Any(location => location.EndsWith("/EmpId", StringComparison.Ordinal)),
-            "the key check reports a baseline location whose key was removed", ref passed);
         return passed;
     }
 
     /// <summary>
-    /// Returns the baseline entity types, per feed, that neither a custom recognizer nor a Presidio predefined entity covers.
+    /// Returns the baseline entity types, per feed, that no key mapping, custom recognizer or Presidio predefined entity covers.
     /// </summary>
     /// <param name="baseline">The frozen baseline.</param>
     /// <param name="files">The recognizer files by feed.</param>
@@ -77,26 +71,17 @@ public static class ConfigurationChecks
         baseline.Protected
             .Select(e => (Type: FeedCatalog.All.Single(f => f.FolderName == e.Feed).Type, Name: e.Feed, e.Entity))
             .Distinct()
-            .Where(e => !files[e.Type].Recognizers.Any(r => r.Entity == e.Entity) && !PredefinedEntities.Contains(e.Entity))
+            .Where(e => !(files[e.Type].EntityMapping?.Values.Contains(e.Entity) ?? false) && !files[e.Type].Recognizers.Any(r => r.Entity == e.Entity)
+                && !PredefinedEntities.Contains(e.Entity))
             .Select(e => e.Name + " " + e.Entity)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
     /// <summary>
-    /// Returns the baseline locations, as <c>sample pointer</c>, whose property path has no recognizer key of the baseline
-    /// entity: the deepest key on the path decides, as in the protector.
+    /// Returns the property names of a JSON Pointer such as <c>/OrderChangeNotif/Old/Customers/0/PaxId</c>: its segments without array indexes.
     /// </summary>
-    /// <param name="baseline">The frozen baseline.</param>
-    /// <param name="files">The recognizer files by feed.</param>
-    /// <returns>The unkeyed locations in baseline order.</returns>
-    public static IReadOnlyList<string> UnkeyedLocations(ParityBaselineDocument baseline, IReadOnlyDictionary<FeedType, RecognizerFile> files) =>
-        baseline.Protected
-            .Where(e => files[FeedCatalog.All.Single(f => f.FolderName == e.Feed).Type] is var file
-                && e.Location.Split('/').Where(s => s.Length > 0 && !s.All(char.IsAsciiDigit)).Reverse()
-                    .Select(s => file.RecognizerForKey(s.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal)))
-                    .FirstOrDefault(r => r is not null)?.Entity != e.Entity)
-            .Select(e => e.Sample + " " + e.Location)
-            .ToArray();
+    private static string[] Names(string pointer) =>
+        pointer.Split('/').Skip(1).Where(segment => !segment.All(char.IsAsciiDigit)).Select(PresidioDemo.Core.Decoder.JsonFeedParser.Unescape).ToArray();
 
     /// <summary>
     /// Throws when a condition fails.

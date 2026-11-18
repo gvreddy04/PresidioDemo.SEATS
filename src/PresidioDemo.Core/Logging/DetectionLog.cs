@@ -33,15 +33,15 @@ public enum DetectionGroup
 
 /// <summary>
 /// Formats the detection log (WR-018): one block per message, with a header line and the decoded strings listed in the
-/// PII, non-PII and review groups, each exactly once. A JSON string is located by its JSON Pointer, with the property names
-/// the recognizer file does not declare shown as <c>?</c> unless values are passed; a string from a codec that reports
-/// payload offsets would be located by its slot and offset. Value-free unless decoded values are passed, which happens only
-/// with <c>Presidio:DetectionLogValues</c> on in a non-production environment (WR-020). Written only while
+/// PII, non-PII and review groups, each exactly once. A JSON string is located by its JSON Pointer, with every property
+/// name the recognizer file does not declare written as <c>?</c>. Value-free unless decoded values are passed, which
+/// happens only with
+/// <c>Presidio:DetectionLogValues</c> on in a non-production environment (WR-020). Written only while
 /// <c>Presidio:DetectionLog</c> is on.
 /// </summary>
 /// <remarks>
 /// The header starts in the first column and every other line is indented, so a log collector can treat each block as one
-/// entry (a multiline start pattern of <c>^\S</c>). Values, full pointers and reasons are JSON-encoded, so none of them can
+/// entry (a multiline start pattern of <c>^\S</c>). Values, pointers and reasons are JSON-encoded, so none of them can
 /// break a line or start a forged entry.
 /// </remarks>
 public static class DetectionLog
@@ -123,7 +123,7 @@ public static class DetectionLog
     }));
 
     /// <summary>
-    /// Encodes a value or reason as one JSON string. Beyond JSON's own escapes, the relaxed encoder
+    /// Encodes a value, pointer, property name or reason as one JSON string. Beyond JSON's own escapes, the relaxed encoder
     /// already escapes line and paragraph separators; zero-width and bidirectional formatting characters are escaped too, so
     /// a value can neither break its line nor change how the rest of the line displays.
     /// </summary>
@@ -168,11 +168,6 @@ public static class DetectionLog
         // The header names the file, then the fields identified and how they split into PII, non-PII and review.
         block.Append(CultureInfo.InvariantCulture,
             $"{FeedCatalog.Get(feed).FolderName} {transaction:N} DETECTION {(rejectReason is null ? "PUBLISHED" : "DEAD-LETTERED")} file={File(source)} fields={events.Count} pii={groups[DetectionGroup.Pii].Count()} non-pii={groups[DetectionGroup.NonPii].Count()} review={groups[DetectionGroup.Review].Count()}");
-        if (events.Any(e => e.Offset is not null))
-        {
-            // Only a codec that locates strings by payload offset names the offset base.
-            block.Append(" offsets=payload");
-        }
         if (rejectReason is not null)
         {
             block.Append(" reason=").Append(Encode(rejectReason));
@@ -257,8 +252,8 @@ public static class DetectionLog
     private static bool IsFormatting(char c) => c is >= (char)0x200B and <= (char)0x200F or >= (char)0x202A and <= (char)0x202E or >= (char)0x2066 and <= (char)0x2069;
 
     /// <summary>
-    /// Returns where a string sits: for JSON, the value-free pointer, or the full JSON-encoded pointer under WR-020;
-    /// otherwise <c>slot 12 @0x01A4</c>, or <c>slot 12</c> when the codec reported no offset.
+    /// Returns where a string sits: the value-free pointer, such as <c>/0/?/1/FirstName</c>, or the full JSON-encoded pointer
+    /// under WR-020.
     /// </summary>
     /// <param name="e">The event.</param>
     /// <param name="withValues">Whether the block carries values.</param>
@@ -269,13 +264,7 @@ public static class DetectionLog
         {
             return Encode(e.Pointer);
         }
-        if (e.SafePointer.Length > 0)
-        {
-            return e.SafePointer;
-        }
-        return e.Offset is int offset
-            ? string.Create(CultureInfo.InvariantCulture, $"slot {e.Slot} @0x{offset:X4}")
-            : string.Create(CultureInfo.InvariantCulture, $"slot {e.Slot}");
+        return e.SafePointer.Length > 0 ? e.SafePointer : string.Create(CultureInfo.InvariantCulture, $"slot {e.Slot}");
     }
 
     /// <summary>

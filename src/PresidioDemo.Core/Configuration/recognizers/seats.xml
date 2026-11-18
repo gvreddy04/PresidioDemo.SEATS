@@ -1,93 +1,91 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Seats recognizers in the Presidio-style format (WR-014): a flat list under <recognizers> that mirrors Presidio's
-  recognizer registry YAML, its analyze allow_list and its anonymizers map, using Presidio's names.
-  Seats is a JSON feed: every JSON string value is decided on its own, located by its key path; numbers, booleans and
-  nulls never change. <key> is this worker's one extension of Presidio's format, for JSON feeds: a key on a custom
-  recognizer makes every string value at or below that property its entity (a number or boolean there dead-letters the
-  message), and a key in <allow_list> publishes the values of that property unchanged without analysis. Keys match
-  property names ignoring case, and each key may be declared once. Any other string that matches an <allow_list> item end
-  to end is published unchanged; otherwise every span detected at or above default_score_threshold gets its entity's
-  <anonymizer>, else DEFAULT, else Presidio's replace; a string in which nothing is detected is published unchanged and
-  listed for review. Every result keeps the string's width (WR-015). Values below are made up.
+  recognizer registry YAML, its analyze allow_list and its anonymizers map, using Presidio's names. The payload is JSON:
+  every JSON string is a candidate and is decided on its own; numbers, booleans and nulls never change.
+  Order per string: a string under an <entity_mapping> key is that entity across its whole width; a string under a
+  <keys_to_skip> key, or that matches an <allow_list> item end to end, is published unchanged; otherwise Presidio
+  analyzes it with the property names of its key path as context words, and every span detected at or above
+  default_score_threshold gets its entity's <anonymizer>, else DEFAULT, else Presidio's replace. A string in which nothing
+  is detected is published unchanged and listed for review. Every result keeps the string's width (WR-015).
+  A key is a JSON property name, matched ignoring case anywhere on the key path. Values below are made up.
 -->
 <recognizers feed="Seats" language="en" default_score_threshold="0.5">
 
   <!-- ===== Predefined recognizers (Presidio's own). All of them run unless switched off by class name, for example:
        <recognizer name="CryptoRecognizer" type="predefined" enabled="false" />  ===== -->
 
-  <!-- ===== Custom recognizers (Presidio type: custom). ===== -->
+  <!-- ===== Custom pattern recognizers (Presidio type: custom), for strings under no mapped or skipped key. ===== -->
 
-  <!-- Examples: "LastName": "MILLER" -> "******"; MILLER/JORDAN under any key -> *************. -->
+  <!-- Example: in "Remarks": "REF 1234 MILLER/JORDAN", MILLER/JORDAN -> *************. -->
   <recognizer name="passengerName" type="custom" supported_entity="PERSON">
     <pattern name="surname/given" score="0.9">(?&lt;![A-Z])[A-Z]{2,}(?:[ '-][A-Z]+)*/[A-Z]+(?:[ '-][A-Z]+)*</pattern>
-    <key>FirstName</key>
-    <key>LastName</key>
-    <key>MiddleName</key>
-    <key>BookedAsName</key>
   </recognizer>
 
-  <!-- Example: "PaxId": "K7QX2M00001" -> "***********". -->
-  <recognizer name="passengerId" type="custom" supported_entity="PASSENGER_ID">
-    <key>PaxId</key>
-  </recognizer>
+  <!-- ===== Entity mapping (Presidio structured analysis): the whole value under a key is the entity. ===== -->
+  <!-- A number or boolean under a mapped key cannot be protected in its JSON type, so the message is dead-lettered
+       (WR-016). Examples: "LastName": "MILLER" -> "******"; "BookedAsName": "MILLER/JORDAN" -> "*************";
+       "PaxId": 1001 dead-letters the message. -->
+  <entity_mapping>
+    <key name="FirstName" entity="PERSON" />
+    <key name="LastName" entity="PERSON" />
+    <key name="MiddleName" entity="PERSON" />
+    <key name="BookedAsName" entity="PERSON" />
+    <!-- Example: "PaxId": "K7QX2M00001" -> "***********". -->
+    <key name="PaxId" entity="PASSENGER_ID" />
+    <!-- Example: "OrderId": "DA012K7QX2M00" -> "*************". -->
+    <key name="OrderId" entity="ORDER_ID" />
+    <!-- Example: "EmpId": "svc-demo-01" -> "***********". -->
+    <key name="EmpId" entity="EMPLOYEE_ID" />
+    <!-- Example: "Attributes": ["WINDOW", "PETINCABIN"] -> ["******", "**********"]; also the IATA and TTY attribute codes. -->
+    <key name="Attributes" entity="SENSITIVE_ATTRIBUTE" />
+    <key name="IATAAttributes" entity="SENSITIVE_ATTRIBUTE" />
+    <key name="TTYAttributes" entity="SENSITIVE_ATTRIBUTE" />
+  </entity_mapping>
 
-  <!-- Example: "OrderId": "DA012K7QX2M00" -> "*************". -->
-  <recognizer name="orderId" type="custom" supported_entity="ORDER_ID">
-    <key>OrderId</key>
-  </recognizer>
+  <!-- ===== Keys to skip (Presidio analyze_dict keys_to_skip): published unchanged without analysis. ===== -->
+  <!-- The record locator stays unchanged. Example: "UARecloc": "K7QX2M". -->
+  <keys_to_skip>
+    <key name="UARecloc" />
+    <key name="pnr" />
+    <!-- Operational values. Examples: "SeatNumber": "23C", "Cabin": "Y". -->
+    <key name="AAA" />
+    <key name="ActionType" />
+    <key name="AgentSine" />
+    <key name="BookingClass" />
+    <key name="Cabin" />
+    <key name="ChannelId" />
+    <key name="ChannelName" />
+    <key name="ChgReasonCode" />
+    <key name="ClientId" />
+    <key name="CreateDateTime" />
+    <key name="EventName" />
+    <key name="EventTime" />
+    <key name="EventType" />
+    <key name="EventVersion" />
+    <key name="FlightLegArrivalTime" />
+    <key name="FlightLegDepartureTime" />
+    <key name="FlightLegOffPoint" />
+    <key name="FlightLegRefId" />
+    <key name="FlightSegRefId" />
+    <key name="LEID" />
+    <key name="LastUpdateDateTime" />
+    <key name="OccStatus" />
+    <key name="OrderCreateDateTime" />
+    <key name="OrderItemId" />
+    <key name="OrderVersion" />
+    <key name="SeatNumber" />
+    <key name="SeqInPNR" />
+    <key name="ServiceItemId" />
+    <key name="ServiceType" />
+    <key name="Source" />
+    <key name="UAReclocCreateDate" />
+  </keys_to_skip>
 
-  <!-- Example: "EmpId": "svc-demo-01" -> "***********". -->
-  <recognizer name="employeeId" type="custom" supported_entity="EMPLOYEE_ID">
-    <key>EmpId</key>
-  </recognizer>
-
-  <!-- Example: "Attributes": ["WINDOW", "PETINCABIN"] -> ["******", "**********"]; also IATA and TTY attribute codes. -->
-  <recognizer name="serviceAttributes" type="custom" supported_entity="SENSITIVE_ATTRIBUTE">
-    <key>Attributes</key>
-    <key>IATAAttributes</key>
-    <key>TTYAttributes</key>
-  </recognizer>
-
-  <!-- ===== Allow list: published unchanged without analysis. ===== -->
+  <!-- ===== Allow list: a decoded string that matches an item end to end is published unchanged. ===== -->
+  <!-- Examples: 2026-11-09, 2026-11-09T14:05:33.120Z, 2026-11-09T02:05:33.120 PM, under any key. -->
   <allow_list match="regex">
-    <!-- A string that matches an item end to end. Example: 2026-11-09T14:05:33.120 PM or 2026-11-09. -->
     <item>\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z?)?(?: [A-Z]{2})?</item>
-    <!-- The values of these operational properties. Example: "SeatNumber": "23C" and "Cabin": "Y". -->
-    <key>AAA</key>
-    <key>ActionType</key>
-    <key>AgentSine</key>
-    <key>BookingClass</key>
-    <key>Cabin</key>
-    <key>ChannelId</key>
-    <key>ChannelName</key>
-    <key>ChgReasonCode</key>
-    <key>ClientId</key>
-    <key>CreateDateTime</key>
-    <key>EventName</key>
-    <key>EventTime</key>
-    <key>EventType</key>
-    <key>EventVersion</key>
-    <key>FlightLegArrivalTime</key>
-    <key>FlightLegDepartureTime</key>
-    <key>FlightLegOffPoint</key>
-    <key>FlightLegRefId</key>
-    <key>FlightSegRefId</key>
-    <key>LEID</key>
-    <key>LastUpdateDateTime</key>
-    <key>OccStatus</key>
-    <key>OrderCreateDateTime</key>
-    <key>OrderItemId</key>
-    <key>OrderVersion</key>
-    <key>SeatNumber</key>
-    <key>SeqInPNR</key>
-    <key>ServiceItemId</key>
-    <key>ServiceType</key>
-    <key>Source</key>
-    <key>UAReclocCreateDate</key>
-    <!-- The PNR (record locator) stays unchanged. Example: "UARecloc": "K7QX2M". -->
-    <key>UARecloc</key>
-    <key>pnr</key>
   </allow_list>
 
   <!-- ===== Anonymizers (Presidio anonymizers map): one action per entity. ===== -->

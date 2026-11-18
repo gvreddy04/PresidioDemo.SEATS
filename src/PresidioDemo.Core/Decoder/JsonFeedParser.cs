@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using PresidioDemo.Core.Models;
@@ -5,10 +6,11 @@ using PresidioDemo.Core.Models;
 namespace PresidioDemo.Core.Decoder;
 
 /// <summary>
-/// Shared System.Text.Json processing for the JSON feeds, with exact unselected bytes. The Seats feed has one sealed
-/// child, <see cref="SeatsParser"/>.
+/// Shared System.Text.Json processing for the JSON feeds, with exact unselected bytes: every scalar becomes a field, and
+/// a protected string is written back character by character, so every byte outside a changed character stays as it was.
 /// </summary>
-/// <param name="feed">The supported feed route.</param>
+/// The Seats feed has one sealed child, <see cref="SeatsParser"/>.
+/// <param name="feed">The JSON feed route this parser serves.</param>
 /// <param name="rootKind">The required JSON array or object root for this feed.</param>
 public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IFeedCodec
 {
@@ -17,8 +19,8 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
 
     /// <summary>
     /// Returns every JSON string scalar of a parse, in payload order, as a text candidate for detection. The field name is
-    /// the wildcard key path (for example <c>/OrderChangeNotif/Old/Customers/*/FirstName</c>), whose last segment is the detection context.
-    /// Numbers, booleans and nulls are never candidates and must stay unchanged.
+    /// the wildcard key path (for example <c>/OrderChangeNotif/Old/Customers/*/FirstName</c>), whose property names are the detection
+    /// context. Numbers, booleans and nulls are never candidates and must stay unchanged.
     /// </summary>
     /// <param name="parsed">A parse result from a JSON feed codec.</param>
     /// <returns>The string fields.</returns>
@@ -29,9 +31,39 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
         {
             throw new InvalidDataException("The parse did not come from a JSON feed codec.");
         }
-        var strings = layout.Scalars.Where(scalar => scalar.Kind == JsonTokenType.String).Select(scalar => scalar.Field.Id).ToHashSet(StringComparer.Ordinal);
-        return parsed.Fields.Where(field => strings.Contains(field.Id)).ToArray();
+        return layout.Scalars.Where(scalar => scalar.Kind == JsonTokenType.String).Select(scalar => scalar.Field).ToArray();
     }
+
+    /// <summary>
+    /// Returns the fields of a parse that are numbers or booleans, which a protection can never change.
+    /// </summary>
+    /// <param name="parsed">A parse result from a JSON feed codec.</param>
+    /// <returns>The number and boolean fields, in payload order.</returns>
+    /// <exception cref="InvalidDataException">The parse did not come from a JSON feed codec.</exception>
+    public static IReadOnlyList<FeedField> NumberOrBooleanFields(ParsedFeed parsed)
+    {
+        if (parsed.Layout is not JsonLayout layout)
+        {
+            throw new InvalidDataException("The parse did not come from a JSON feed codec.");
+        }
+        return layout.Scalars.Where(scalar => scalar.Kind is JsonTokenType.Number or JsonTokenType.True or JsonTokenType.False)
+            .Select(scalar => scalar.Field).ToArray();
+    }
+
+    /// <summary>
+    /// Returns the unescaped property names of a wildcard key path, outermost first, without array wildcards.
+    /// </summary>
+    /// <param name="path">The wildcard key path, such as <c>/OrderChangeNotif/Old/Customers/*/FirstName</c>.</param>
+    /// <returns>The property names, such as <c>Customers</c> and <c>FirstName</c>.</returns>
+    public static IReadOnlyList<string> PropertyNames(string path) =>
+        path.Split('/').Where(segment => segment.Length > 0 && segment != "*").Select(Unescape).ToArray();
+
+    /// <summary>
+    /// Returns a JSON Pointer segment without its <c>~1</c> and <c>~0</c> escapes.
+    /// </summary>
+    /// <param name="segment">The escaped segment.</param>
+    /// <returns>The property name or array index.</returns>
+    public static string Unescape(string segment) => segment.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal);
 
     /// <summary>
     /// Parses the complete input, validates its supported shape and retains the layout required for reconstruction.
@@ -68,16 +100,22 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
         {
             throw new InvalidDataException($"Incomplete or malformed JSON payload at line {error.LineNumber}, byte {error.BytePositionInLine}; the complete message is retained without output.");
         }
+        catch (InvalidOperationException)
+        {
+            // A string with an invalid escape or lone surrogate cannot be decoded, so it cannot be checked (WR-016).
+            throw new InvalidDataException("A JSON string cannot be decoded; the complete message is retained without output.");
+        }
         if (scalars.Count == 0)
         {
-            throw new InvalidDataException("JSON feed contains no configured scalar fields.");
+            throw new InvalidDataException("JSON feed contains no scalar fields.");
         }
         return new(Array.AsReadOnly(scalars.Select(scalar => scalar.Field).ToArray()),
             new JsonLayout(message, envelope, scalars.AsReadOnly()));
     }
 
     /// <summary>
-    /// Reconstructs the original message representation using the complete protected field set.
+    /// Reconstructs the original message representation using the complete protected field set. A changed string keeps
+    /// the original bytes of every character that did not change, escapes included.
     /// </summary>
     /// <param name="original">The complete extracted field set and its retained codec-specific serialization layout.</param>
     /// <param name="anonymizedFields">The complete protected field values indexed by original instance identifier.</param>
@@ -100,9 +138,10 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
                     throw new InvalidDataException("Protected field is missing or null.");
                 }
                 output.Write(layout.Envelope.Payload.AsSpan(cursor, scalar.Offset - cursor));
+                var token = layout.Envelope.Payload.AsSpan(scalar.Offset, scalar.Length);
                 if (value == scalar.Field.Value)
                 {
-                    output.Write(layout.Envelope.Payload.AsSpan(scalar.Offset, scalar.Length));
+                    output.Write(token);
                 }
                 else
                 {
@@ -110,7 +149,7 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
                     {
                         throw new InvalidDataException("Non-string JSON fields must remain unchanged.");
                     }
-                    output.Write(JsonSerializer.SerializeToUtf8Bytes(value));
+                    output.Write(Rewrite(token, scalar.Field.Value, value));
                 }
                 cursor = scalar.Offset + scalar.Length;
             }
@@ -180,16 +219,104 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
         return layout;
     }
 
-    // JSON supplies the structure. Instance paths locate fields; wildcard paths select XML rules.
+    /// <summary>
+    /// Writes a changed string token. When the protected value is as long as the original, each run of original bytes
+    /// that decodes to unchanged characters is copied as it was (so an escape such as <c>é</c> or <c>\/</c> keeps its
+    /// spelling) and only the changed characters are encoded; otherwise the whole value is encoded.
+    /// </summary>
+    /// <param name="token">The original string token, quotes included.</param>
+    /// <param name="before">The decoded original value.</param>
+    /// <param name="after">The protected value.</param>
+    /// <returns>The protected string token, quotes included.</returns>
+    private static byte[] Rewrite(ReadOnlySpan<byte> token, string before, string after)
+    {
+        var output = new List<byte>(token.Length + 8) { (byte)'"' };
+        var units = after.Length == before.Length ? Units(token) : null;
+        if (units is null || units.Sum(unit => unit.Chars) != before.Length)
+        {
+            Encode(after, output);
+        }
+        else
+        {
+            int position = 0;
+            foreach (var unit in units)
+            {
+                if (string.CompareOrdinal(before, position, after, position, unit.Chars) == 0)
+                {
+                    output.AddRange(token.Slice(unit.Start, unit.Length));
+                }
+                else
+                {
+                    Encode(after.Substring(position, unit.Chars), output);
+                }
+                position += unit.Chars;
+            }
+        }
+        output.Add((byte)'"');
+        return output.ToArray();
+    }
+
+    /// <summary>
+    /// Splits a string token into the byte runs of its characters: one escape, or one UTF-8 sequence (two UTF-16
+    /// characters for a character outside the Basic Multilingual Plane).
+    /// </summary>
+    /// <param name="token">The string token, quotes included.</param>
+    /// <returns>Each run's start, byte length and UTF-16 character count.</returns>
+    private static List<(int Start, int Length, int Chars)> Units(ReadOnlySpan<byte> token)
+    {
+        var units = new List<(int, int, int)>();
+        int end = token.Length - 1;
+        for (int at = 1; at < end;)
+        {
+            byte b = token[at];
+            int length = b == (byte)'\\' ? (token[at + 1] == (byte)'u' ? 6 : 2)
+                : b < 0x80 ? 1 : b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2;
+            int chars = b != (byte)'\\' && b >= 0xF0 ? 2 : 1;
+            units.Add((at, length, chars));
+            at += length;
+        }
+        return units;
+    }
+
+    /// <summary>
+    /// Appends text as the inside of a JSON string: quotes, backslashes and control characters escaped, a lone surrogate
+    /// as <c>\uXXXX</c>, every other character as UTF-8.
+    /// </summary>
+    /// <param name="text">The text.</param>
+    /// <param name="output">The bytes being written.</param>
+    private static void Encode(string text, List<byte> output)
+    {
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c is '"' or '\\')
+            {
+                output.Add((byte)'\\');
+                output.Add((byte)c);
+            }
+            else if (c < ' ' || (char.IsSurrogate(c) && !(i + 1 < text.Length && char.IsSurrogatePair(c, text[i + 1]))))
+            {
+                output.AddRange(Encoding.ASCII.GetBytes(string.Create(CultureInfo.InvariantCulture, $"\\u{(int)c:x4}")));
+            }
+            else
+            {
+                int count = char.IsHighSurrogate(c) ? 2 : 1;
+                output.AddRange(Encoding.UTF8.GetBytes(text.Substring(i, count)));
+                i += count - 1;
+            }
+        }
+    }
+
+    // JSON supplies the structure. Instance paths locate fields; wildcard paths carry the property names.
     /// <summary>
     /// Traverses JSON objects and arrays using System.Text.Json and records exact scalar spans.
     /// </summary>
     /// <param name="reader">The JSON token reader positioned at the value being traversed.</param>
     /// <param name="id">The instance path locating one value within this message.</param>
-    /// <param name="rule">The validated field-protection rule being exercised.</param>
+    /// <param name="path">The wildcard key path, with array indexes as <c>*</c>.</param>
     /// <param name="scalars">The ordered scalar locations collected during complete-message parsing.</param>
     /// <exception cref="InvalidDataException">The supplied message, field set or configuration violates the reviewed processing contract.</exception>
-    private static void ReadValue(ref Utf8JsonReader reader, string id, string rule, List<Scalar> scalars)
+    private static void ReadValue(ref Utf8JsonReader reader, string id, string path, List<Scalar> scalars)
     {
         if (reader.TokenType == JsonTokenType.StartObject)
         {
@@ -210,7 +337,7 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
                     throw new InvalidDataException("Incomplete JSON object.");
                 }
                 string escaped = name.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
-                ReadValue(ref reader, id + "/" + escaped, rule + "/" + escaped, scalars);
+                ReadValue(ref reader, id + "/" + escaped, path + "/" + escaped, scalars);
             }
             if (reader.TokenType != JsonTokenType.EndObject)
             {
@@ -222,7 +349,7 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
             int index = 0;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
-                ReadValue(ref reader, id + "/" + index++, rule + "/*", scalars);
+                ReadValue(ref reader, id + "/" + index++.ToString(CultureInfo.InvariantCulture), path + "/*", scalars);
             }
             if (reader.TokenType != JsonTokenType.EndArray)
             {
@@ -234,7 +361,7 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
         {
             string value = reader.TokenType == JsonTokenType.String ? reader.GetString()! :
                 reader.TokenType == JsonTokenType.Null ? "" : Encoding.UTF8.GetString(reader.ValueSpan);
-            scalars.Add(new(new(id, rule, value), checked((int)reader.TokenStartIndex),
+            scalars.Add(new(new(id, path, value), checked((int)reader.TokenStartIndex),
                 checked((int)(reader.BytesConsumed - reader.TokenStartIndex)), reader.TokenType));
         }
         else
@@ -259,9 +386,9 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
     /// Retains one parsed scalar and the wire span needed to rebuild its value.
     /// </summary>
     /// <param name="Field">The parsed protection field associated with this binding.</param>
-    /// <param name="Offset">The zero-based payload byte offset of this value or span.</param>
-    /// <param name="Length">The wire span or observed file length in bytes.</param>
-    /// <param name="Kind">The declared primitive, collection or optional-structure representation.</param>
+    /// <param name="Offset">The zero-based payload byte offset of the token.</param>
+    /// <param name="Length">The token length in bytes, quotes included for a string.</param>
+    /// <param name="Kind">The JSON token type.</param>
     private sealed record Scalar(FeedField Field, int Offset, int Length, JsonTokenType Kind);
 
     #endregion

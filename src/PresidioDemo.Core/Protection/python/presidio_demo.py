@@ -12,7 +12,7 @@ import os
 # message is dead-lettered instead (WR-016). One second keeps a runaway pattern from holding the engine for long.
 os.environ.setdefault("REGEX_TIMEOUT_SECONDS", "1")
 
-from presidio_analyzer import BatchAnalyzerEngine, AnalyzerEngine, Pattern, PatternRecognizer, RecognizerRegistry, RecognizerResult
+from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer, RecognizerRegistry, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 
 if importlib.util.find_spec("en_core_web_lg") is None:
@@ -36,7 +36,7 @@ class _TimeoutWatch(logging.Handler):
 _timeouts = _TimeoutWatch()
 logging.getLogger("presidio-analyzer").addHandler(_timeouts)
 
-# Per-feed detection engines built by configure_feed: feed name -> (batch engine or None, language).
+# Per-feed detection engines built by configure_feed: feed name -> (analyzer engine or None, language).
 _feeds = {}
 
 
@@ -65,14 +65,16 @@ def configure_feed(config_json):
     # An empty registry would make AnalyzerEngine load every default recognizer, so a feed whose every recognizer is
     # switched off gets no engine and detects nothing.
     engine = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=[language]) if registry.recognizers else None
-    _feeds[config["feed"]] = (BatchAnalyzerEngine(engine) if engine else None, language)
+    _feeds[config["feed"]] = (engine, language)
     return config["feed"]
 
 
-def analyze_strings(feed, texts_json):
+def analyze_strings(feed, texts_json, contexts_json="null"):
     """Detect personal-data spans in each decoded string of one message, in one batch.
 
-    texts_json is a JSON list of strings. Returns a JSON list with one list per string of
+    texts_json is a JSON list of strings. contexts_json is null or a JSON list with one list of context words per string:
+    the property names of a JSON string's key path, which Presidio's context enhancer matches against the recognizers'
+    context words, as BatchAnalyzerEngine.analyze_dict passes a key. Returns a JSON list with one list per string of
     [start, end, entity, score, recognizer name], with UTF-16 offsets. The recognizer name is the custom recognizer's
     name or the predefined recognizer's class name, such as SpacyRecognizer.
     Raises when a pattern timed out, so the caller dead-letters the message rather than publish unchecked text.
@@ -82,14 +84,22 @@ def analyze_strings(feed, texts_json):
     texts = json.loads(texts_json)
     if not isinstance(texts, list) or not all(isinstance(text, str) for text in texts):
         raise ValueError("A JSON list of strings is required")
+    contexts = json.loads(contexts_json)
+    if contexts is None:
+        contexts = [[] for _ in texts]
+    if (not isinstance(contexts, list) or len(contexts) != len(texts)
+            or not all(isinstance(words, list) and all(isinstance(word, str) for word in words) for words in contexts)):
+        raise ValueError("One JSON list of context words per string is required")
     engine, language = _feeds[feed]
     if engine is None or not texts:
         return json.dumps([[] for _ in texts])
     _timeouts.timed_out = False
-    # Every span is returned, including those below the feed threshold: .NET applies the threshold and lists a string
-    # with only weak detections for review (WR-018).
-    results = list(engine.analyze_iterator(texts, language=language, score_threshold=0.0,
-                                           batch_size=max(1, min(len(texts), 64))))
+    # spaCy processes the batch at once, as BatchAnalyzerEngine.analyze_iterator does; each string is then analyzed with
+    # its own context. Every span is returned, including those below the feed threshold: .NET applies the threshold and
+    # lists a string with only weak detections for review (WR-018).
+    artifacts = engine.nlp_engine.process_batch(texts=texts, language=language, batch_size=max(1, min(len(texts), 64)))
+    results = [engine.analyze(text=text, language=language, nlp_artifacts=nlp_artifacts, score_threshold=0.0, context=words or None)
+               for (text, nlp_artifacts), words in zip(artifacts, contexts)]
     if _timeouts.timed_out:
         raise TimeoutError("A recognizer pattern timed out")
     return json.dumps([[[_utf16(text, r.start), _utf16(text, r.end), r.entity_type, round(float(r.score), 4),

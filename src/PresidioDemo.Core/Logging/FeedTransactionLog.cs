@@ -105,7 +105,7 @@ public static class FeedTransactionLog
     }
 
     /// <summary>
-    /// Appends the detection log block, placed after the decoded payload so its JSON Pointers can be followed there.
+    /// Appends the detection log block, placed after the payload so its JSON Pointers can be followed there.
     /// </summary>
     /// <param name="report">The transaction-report buffer receiving diagnostic content.</param>
     /// <param name="detection">The block from <see cref="DetectionLog.FormatBlock"/>, or null when detection did not run.</param>

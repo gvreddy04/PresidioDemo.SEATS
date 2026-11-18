@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using PresidioDemo.Core.Decoder;
 using PresidioDemo.Core.Logging;
 using PresidioDemo.Core.Models;
 using PresidioDemo.Core.Pipeline;
@@ -16,7 +17,7 @@ using PresidioDemo.Worker.Pipeline;
 // Subscribes to the protected output topic of every route in the environment selected in the worker's appsettings.json
 // (DOTNET_ENVIRONMENT, else CurrentEnvironment), like any other subscriber: nothing is removed from a queue, and only messages
 // published while it runs are received. Each message is decoded with its feed's codec and written to a text file with every
-// decoded value, its JSON Pointer and published value (QF-26111602). The file is local diagnostics under the
+// decoded JSON string, its JSON Pointer and published value (QF-26111602). The file is local diagnostics under the
 // git-ignored .test-runs folder; it holds the published (protected) values, never the worker's input.
 const string usage = "Usage: dotnet run --project tools/FeedOutputReader -- [--topic <topic>] [--output <file>] [--count <n>] [--settings <appsettings.json>]";
 string project = AppContext.BaseDirectory;
@@ -136,11 +137,10 @@ static (string Block, string Summary) Describe(int number, FeedType feed, Inboun
     {
         // The worker publishes the input's transport format unchanged (WR-004) without a format header, so it is read from the bytes.
         var delivery = new FeedDelivery(feed, Guid.Empty, "output" + (format == FeedWorker.MqExportFormat ? ".txt" : ".bin"), "");
-        var fields = FeedCodecRegistry.Create(feed).Parse(new FeedMessage(delivery, message.Payload)).Fields;
+        var fields = JsonFeedParser.StringFields(FeedCodecRegistry.Create(feed).Parse(new FeedMessage(delivery, message.Payload)));
         string[] locations = fields.Select(Location).ToArray();
         int width = locations.Select(l => l.Length).DefaultIfEmpty(0).Max();
-        string offsets = fields.Any(f => f.Offset is not null) ? " | offsets=payload" : "";
-        block.AppendLine(CultureInfo.InvariantCulture, $"  feed {folder} | format {format} | {message.Payload.Length} bytes | fields={fields.Count}{offsets}");
+        block.AppendLine(CultureInfo.InvariantCulture, $"  feed {folder} | format {format} | {message.Payload.Length} bytes | fields={fields.Count}");
         block.AppendLine("  Decoded fields (published values)");
         if (fields.Count == 0)
         {
@@ -151,27 +151,20 @@ static (string Block, string Summary) Describe(int number, FeedType feed, Inboun
             block.Append("    ").Append(locations[i].PadRight(width)).Append("  ").AppendLine(DetectionLog.Encode(fields[i].Value));
         }
         block.AppendLine();
-        return (block.ToString(), $"RECV {folder,-6} {file,-24} {message.Payload.Length,7} bytes  fields={fields.Count}");
+        return (block.ToString(), $"RECV {folder,-11} {file,-24} {message.Payload.Length,7} bytes  fields={fields.Count}");
     }
     catch (InvalidDataException ex)
     {
         block.AppendLine(CultureInfo.InvariantCulture, $"  feed {folder} | format {format} | {message.Payload.Length} bytes | not decoded: {DetectionLog.Encode(ex.Message)}");
         block.AppendLine();
-        return (block.ToString(), $"RECV {folder,-6} {file,-24} {message.Payload.Length,7} bytes  NOT DECODED: {ex.Message}");
+        return (block.ToString(), $"RECV {folder,-11} {file,-24} {message.Payload.Length,7} bytes  NOT DECODED: {ex.Message}");
     }
 }
 
-// Returns where a decoded value sits, as the detection log writes it with values: its JSON Pointer, JSON-encoded when it is
-// not printable ASCII or starts with a quote, so a property name cannot break the line; or slot 12 @0x01A4 for a codec
-// that reports payload offsets.
-static string Location(FeedField field)
-{
-    if (field.Offset is int offset)
-    {
-        return string.Create(CultureInfo.InvariantCulture, $"{field.Id} @0x{offset:X4}");
-    }
-    return field.Id.Length > 0 && field.Id[0] != '"' && field.Id.All(c => c is >= ' ' and <= '~') ? field.Id : DetectionLog.Encode(field.Id);
-}
+// Returns where a decoded string sits: its JSON Pointer, such as /OrderChangeNotif/Old/Customers/0/FirstName, as it is when it is printable
+// ASCII and does not start with a quote, otherwise JSON-encoded, so no property name can break or forge a line.
+static string Location(FeedField field) =>
+    field.Id.Length > 0 && field.Id[0] != '"' && field.Id.All(c => c is >= ' ' and <= '~') ? field.Id : DetectionLog.Encode(field.Id);
 
 // Returns whether a payload is an IBM MQ export or diagnostic dump (UTF-8 text the MQ reader accepts) rather than raw bytes.
 static bool IsMqExport(ReadOnlySpan<byte> payload)

@@ -10,7 +10,7 @@ from pipeline_harness import PROJECT, run
 
 SPIKE = PROJECT / "tests" / "DetectionParityChecks" / "bin" / "Debug" / "net10.0" / "DetectionParityChecks.dll"
 HEADER = re.compile(r"^(\S+) ([0-9a-f]{32}) DETECTION (PUBLISHED|DEAD-LETTERED) file=(?:\S+) fields=(\d+) pii=(\d+) non-pii=(\d+) review=(\d+)"
-                    r"( offsets=payload)?( reason=(\".*\"))?$")
+                    r"( reason=(\".*\"))?$")
 TAIL = re.compile(r"  recognizer=(\S+) entity=(\S+) score=(\d\.\d\d)(?:<\d\.\d\d)?(?: operator=(\S+))? "
                   r"decision=(changed|kept|allowed|nothing-detected|below-threshold)(?: reason=(\S+) fix=(\".*\"))?$")
 GROUPS = {"  PII fields (changed)": "pii", "  Non-PII fields (unchanged)": "non-pii", "  Review (check these; each line has a fix)": "review"}
@@ -52,7 +52,7 @@ def shape(value):
 def declared_keys():
     """JSON property names declared in the recognizer files; value-free pointers print only these (WR-018)."""
     folder = PROJECT / "src" / "PresidioDemo.Core" / "Configuration" / "recognizers"
-    return {key.text.strip() for path in folder.glob("*.xml") for key in ET.parse(path).getroot().iter("key")}
+    return {key.get("name") for path in folder.glob("*.xml") for key in ET.parse(path).getroot().iter("key")}
 
 
 def leaked_values(text):
@@ -146,7 +146,7 @@ class DetectionLogTests(unittest.TestCase):
             self.assertEqual(int(header.group(4)), len(entries))
             for group, index in (("pii", 5), ("non-pii", 6), ("review", 7)):
                 self.assertEqual(int(header.group(index)), sum(1 for g, _ in entries if g == group))
-            self.assertIsNone(header.group(8), "a JSON block locates strings by pointer, so it names no offset base")
+            self.assertNotIn(" offsets=", block["lines"][0], "a JSON block is located by pointers, so it names no offset base")
             for group, line in entries:
                 self.assertTrue(line.startswith("    /"), "a value-free entry starts with its pointer")
                 tail = TAIL.search(line)

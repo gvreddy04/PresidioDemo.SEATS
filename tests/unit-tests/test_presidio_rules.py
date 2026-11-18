@@ -1,4 +1,5 @@
-"""Unit checks for the local detection bridge: spans only, per-feed registries from the Presidio-style file, timeouts."""
+"""Unit checks for the local detection bridge: spans only, per-feed registries from the Presidio-style file, key-path
+context words and timeouts."""
 from pathlib import Path
 import json
 import subprocess
@@ -17,16 +18,22 @@ def config(feed, disabled=(), recognizers=()):
     return json.dumps({"feed": feed, "language": "en", "disabled": list(disabled), "recognizers": list(recognizers)})
 
 
-def custom(name, entity, *patterns, deny_list=(), score=0.9):
+def custom(name, entity, *patterns, deny_list=(), score=0.9, context=()):
     """Return one custom recognizer for the bridge JSON."""
     return {"name": name, "entity": entity, "patterns": [{"name": name, "regex": p, "score": score} for p in patterns],
-            "context": [], "denyList": list(deny_list), "denyListScore": 1.0}
+            "context": list(context), "denyList": list(deny_list), "denyListScore": 1.0}
 
 
 def spans(feed, *texts):
     """Return (entity, matched text, recognizer) per input string from the configured feed."""
     result = json.loads(presidio_demo.analyze_strings(feed, json.dumps(list(texts))))
     return [[(entity, text[start:end], name) for start, end, entity, score, name in found] for text, found in zip(texts, result)]
+
+
+def scores(feed, texts, contexts):
+    """Return the highest score per input string, each analyzed with its own context words."""
+    result = json.loads(presidio_demo.analyze_strings(feed, json.dumps(texts), json.dumps(contexts)))
+    return [max((score for start, end, entity, score, name in found), default=0) for found in result]
 
 
 class DetectionBridgeTests(unittest.TestCase):
@@ -42,6 +49,8 @@ class DetectionBridgeTests(unittest.TestCase):
         presidio_demo.configure_feed(config("OnlyB"))
         presidio_demo.configure_feed(config("NoCards", disabled=["CreditCardRecognizer"]))
         presidio_demo.configure_feed(config("Titles", recognizers=[custom("titles", "TITLE", deny_list=["MR", "DR"])]))
+        presidio_demo.configure_feed(config("Context", disabled=["SpacyRecognizer"],
+                                            recognizers=[custom("memberCode", "MEMBER_CODE", r"ZX\d{4}", score=0.3, context=["membership"])]))
 
     def test_the_seats_feed_configures(self):
         self.assertEqual(sorted(self.feeds), ["Seats"])
@@ -51,10 +60,23 @@ class DetectionBridgeTests(unittest.TestCase):
         self.assertEqual([t for e, t, n in found if n == "passengerName"], ["MILLER/JORDAN", "REED/AVA"])
         self.assertTrue(all(e == "PERSON" for e, t, n in found if n == "passengerName"))
 
-    def test_key_only_recognizers_stay_in_dotnet(self):
-        # PaxId, OrderId, EmpId and the attribute keys are decided by property name in .NET; the bridge never sees them.
+    def test_key_mappings_stay_in_dotnet(self):
+        # PaxId, OrderId, EmpId and the attribute keys are mapped by property name in .NET; the bridge never sees them.
         found = spans("Seats", "PAX-1001", "DA012K7QX2M00", "PETINCABIN")
-        self.assertFalse(any(n in ("passengerId", "orderId", "employeeId", "serviceAttributes") for spans_ in found for e, t, n in spans_))
+        self.assertFalse(any(e in ("PASSENGER_ID", "ORDER_ID", "EMPLOYEE_ID", "SENSITIVE_ATTRIBUTE") for spans_ in found for e, t, n in spans_))
+
+    def test_key_path_context_words_raise_a_matching_recognizer(self):
+        # Each string's property names reach Presidio's context enhancer, as BatchAnalyzerEngine.analyze_dict passes a key.
+        member, remark, none = scores("Context", ["ZX1234", "ZX1234", "ZX1234"], [["Customers", "MembershipCode"], ["Remarks"], []])
+        self.assertGreaterEqual(member, 0.5)
+        self.assertAlmostEqual(remark, 0.3)
+        self.assertAlmostEqual(none, 0.3)
+
+    def test_contexts_must_be_one_list_of_words_per_string(self):
+        with self.assertRaises(ValueError):
+            presidio_demo.analyze_strings("Context", json.dumps(["ZX1234"]), json.dumps([]))
+        with self.assertRaises(ValueError):
+            presidio_demo.analyze_strings("Context", json.dumps(["ZX1234"]), json.dumps([[1]]))
 
     def test_built_in_email_is_found_in_free_text(self):
         found = spans("Seats", "Contact emily.carter@example.com today")[0]

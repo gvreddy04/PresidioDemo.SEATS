@@ -5,8 +5,9 @@ namespace PresidioDemo.DetectionParity;
 
 /// <summary>
 /// Checks the Presidio-style recognizer file reader (WR-014): a valid file loads with its switches, custom recognizers,
-/// JSON keys, allow list and anonymizers, and every invalid or retired form stops startup with a value-free message naming
-/// it. All values are made up.
+/// JSON key mappings and skipped keys, allow list and anonymizers, and every invalid or retired form stops startup with a
+/// value-free message naming it.
+/// All values are made up.
 /// </summary>
 public static class RecognizerFileChecks
 {
@@ -23,11 +24,6 @@ public static class RecognizerFileChecks
           <recognizer name="passengerName" type="custom" supported_entity="PERSON">
             <pattern name="surname/given" score="0.9">(?&lt;![A-Z])[A-Z]{2,}/[A-Z]+</pattern>
             <context>DOCS NAME</context>
-            <key>FirstName</key>
-            <key> LastName </key>
-          </recognizer>
-          <recognizer name="passengerId" type="custom" supported_entity="PASSENGER_ID">
-            <key>PaxId</key>
           </recognizer>
           <recognizer name="titles" type="custom" supported_entity="TITLE" deny_list_score="0.8">
             <deny_list>MR MRS DR</deny_list>
@@ -35,11 +31,18 @@ public static class RecognizerFileChecks
           <recognizer name="unused" type="custom" supported_entity="ORDER_ID" enabled="false">
             <pattern name="order" score="0.85">ORD\d+</pattern>
           </recognizer>
+          <entity_mapping>
+            <key name="FirstName" entity="PERSON" />
+            <key name="DOB" entity="DATE_OF_BIRTH" />
+            <key name="Attributes" entity="SENSITIVE_ATTRIBUTE" />
+          </entity_mapping>
+          <keys_to_skip>
+            <key name="UARecloc" />
+            <key name="FlightLegRefId" />
+          </keys_to_skip>
           <allow_list match="regex">
             <item>\d{4}</item>
             <item>FQT[RS]</item>
-            <key>SeatNumber</key>
-            <key>UARecloc</key>
           </allow_list>
           <anonymizer entity="PERSON" type="mask" masking_char="*" />
           <anonymizer entity="TITLE" type="replace" new_value="[T]" />
@@ -65,19 +68,11 @@ public static class RecognizerFileChecks
             var file = Load(scratch, Valid);
             Check(file.Language == "en" && file.Threshold == 0.6, "root attributes are read", ref passed);
             Check(file.Disabled.SequenceEqual(["CryptoRecognizer"]), "a predefined recognizer with enabled=\"false\" is switched off", ref passed);
-            Check(file.Recognizers.Select(r => r.Name).SequenceEqual(["passengerName", "passengerId", "titles"]), "custom recognizers load; a disabled one is left out", ref passed);
+            Check(file.Recognizers.Select(r => r.Name).SequenceEqual(["passengerName", "titles"]), "custom recognizers load; a disabled one is left out", ref passed);
             var name = file.Recognizers[0];
             Check(name.Entity == "PERSON" && name.Patterns.Single() is { Name: "surname/given", Score: 0.9 } && name.Context.SequenceEqual(["DOCS", "NAME"]),
                 "a pattern keeps its name and score, context words are split on spaces", ref passed);
-            Check(file.Recognizers[2].DenyList.SequenceEqual(["MR", "MRS", "DR"]) && file.Recognizers[2].DenyListScore == 0.8, "a deny list and its score load", ref passed);
-            // JSON keys, this worker's extension of Presidio's format: matched ignoring case, trimmed, one decision per key.
-            Check(name.Keys.SequenceEqual(["FirstName", "LastName"]) && file.RecognizerForKey("lastname")?.Name == "passengerName"
-                && file.RecognizerForKey("PaxId") is { Name: "passengerId", Patterns.Count: 0 } && file.RecognizerForKey("SeatNumber") is null,
-                "recognizer keys load trimmed and match property names ignoring case", ref passed);
-            Check(file.AllowList.AllowsKey("seatnumber") && file.AllowList.AllowsKey("UARecloc") && !file.AllowList.AllowsKey("FirstName") && !file.AllowList.AllowsKey("")
-                && file.Declares("PAXID") && file.Declares("SeatNumber") && !file.Declares("Remarks"), "allow-list keys load, and the file declares only the names it lists", ref passed);
-            Check(!file.ToBridgeJson().Contains("passengerId", StringComparison.Ordinal) && file.ToBridgeJson().Contains("\"passengerName\"", StringComparison.Ordinal)
-                && !file.ToBridgeJson().Contains("FirstName", StringComparison.Ordinal), "a key-only recognizer stays in .NET; keys never reach the bridge", ref passed);
+            Check(file.Recognizers[1].DenyList.SequenceEqual(["MR", "MRS", "DR"]) && file.Recognizers[1].DenyListScore == 0.8, "a deny list and its score load", ref passed);
             Check(file.AllowList.MatchesWhole("1405") && file.AllowList.MatchesWhole("fqtr") && !file.AllowList.MatchesWhole("XXXX1111")
                 && !file.AllowList.MatchesWhole("APPR 1234 OK"), "allow-list items match whole strings only", ref passed);
             Check(file.ActionFor("PERSON") is ({ Operator: AnonymizerOperator.Mask, MaskingChar: '*' }, true)
@@ -85,18 +80,26 @@ public static class RecognizerFileChecks
                 "an entity uses its own anonymizer, else DEFAULT", ref passed);
             var bare = Load(scratch, "<recognizers feed=\"Seats\" />");
             Check(bare.Disabled.Count == 0 && bare.Recognizers.Count == 0 && bare.Threshold == 0.5 && !bare.AllowList.MatchesWhole("1405")
-                && bare.ActionFor("PERSON") is ({ Operator: AnonymizerOperator.Replace }, false) && bare.AllowList.Keys.Count == 0
-                && bare.RecognizerForKey("FirstName") is null, "an empty file loads with Presidio's defaults and replace, and no keys", ref passed);
-            Check(Load(scratch, "<recognizers feed=\"Seats\"><allow_list><key>Cabin</key></allow_list></recognizers>").AllowList is { Items.Count: 0 } keysOnly
-                && keysOnly.AllowsKey("Cabin") && !keysOnly.MatchesWhole("Cabin"), "an allow list may hold keys only", ref passed);
+                && bare.MappedEntity(["FirstName"]) is null && !bare.Skips(["UARecloc"])
+                && bare.ActionFor("PERSON") is ({ Operator: AnonymizerOperator.Replace }, false), "an empty file loads with Presidio's defaults and replace", ref passed);
             Check(Load(scratch, "<recognizers feed=\"Seats\"><allow_list><item>FQTR</item></allow_list></recognizers>").AllowList is { Regex: false } exact
                 && exact.MatchesWhole("FQTR") && !exact.MatchesWhole("fqtr"), "an exact allow list compares the whole text exactly", ref passed);
             Check(file.ToBridgeJson().Contains("\"disabled\":[\"CryptoRecognizer\"]", StringComparison.Ordinal)
                 && file.ToBridgeJson().Contains("\"denyList\":[\"MR\",\"MRS\",\"DR\"]", StringComparison.Ordinal), "the bridge JSON carries switches and deny lists", ref passed);
+            // JSON keys: a mapped key makes its whole value the entity, the innermost mapped name on the path wins, and names
+            // compare ignoring case; a skipped key anywhere on the path publishes the value without analysis.
+            Check(file.MappedEntity(["Customers", "firstname"]) == "PERSON" && file.MappedEntity(["Customers", "LastName"]) is null
+                && file.MappedEntity(["Attributes", "FirstName"]) == "PERSON" && file.MappedEntity(["Attributes", "Code"]) == "SENSITIVE_ATTRIBUTE",
+                "entity_mapping maps a key path to the entity of its innermost mapped name, ignoring case", ref passed);
+            Check(file.Skips(["uarecloc"]) && file.Skips(["FlightLegRefId", "Code"]) && !file.Skips(["Customers", "PaxStatus"]),
+                "keys_to_skip skips a value under a listed name anywhere on its key path, ignoring case", ref passed);
+            Check(file.Declares("dob") && file.Declares("UARecloc") && !file.Declares("Customers"), "mapped and skipped names are declared; others are not", ref passed);
+            Check(!file.ToBridgeJson().Contains("FirstName", StringComparison.Ordinal) && !file.ToBridgeJson().Contains("UARecloc", StringComparison.Ordinal),
+                "key mappings and skipped keys stay in .NET; the bridge JSON does not carry them", ref passed);
 
             Reject(scratch, "<recognizers feed=\"Seats\"", "not well-formed XML", ref passed);
             Reject(scratch, "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x \"y\">]><recognizers feed=\"Seats\" />", "a DTD", ref passed);
-            Reject(scratch, Valid.Replace("feed=\"Seats\"", "feed=\"PNR\""), "the wrong feed attribute", ref passed);
+            Reject(scratch, Valid.Replace("feed=\"Seats\"", "feed=\"OTHER\""), "the wrong feed attribute", ref passed);
             Reject(scratch, Valid.Replace("language=\"en\"", "language=\"de\""), "a language other than en", ref passed);
             Reject(scratch, Valid.Replace("0.6", "1.5"), "a threshold above 1", ref passed);
             Reject(scratch, Valid.Replace("ORD\\d+", "(unclosed"), "a pattern that does not compile", ref passed);
@@ -108,14 +111,7 @@ public static class RecognizerFileChecks
             Reject(scratch, Valid.Replace("type=\"predefined\"", "type=\"builtin\""), "an unknown recognizer type", ref passed);
             Reject(scratch, Valid.Replace("enabled=\"false\" />", "enabled=\"no\" />"), "an enabled value other than true or false", ref passed);
             Reject(scratch, Valid.Replace("supported_entity=\"PERSON\"", "supported_entity=\"person\""), "a lower-case entity", ref passed);
-            Reject(scratch, Valid.Replace("<deny_list>MR MRS DR</deny_list>", ""), "a custom recognizer without a pattern, deny list or key", ref passed);
-            Reject(scratch, Valid.Replace("<key>PaxId</key>", "<key> </key>"), "an empty key", ref passed);
-            Reject(scratch, Valid.Replace("<key>PaxId</key>", "<key>*</key>"), "the array-position key *", ref passed);
-            Reject(scratch, Valid.Replace("<key>PaxId</key>", "<key><name>PaxId</name></key>"), "a key with a child element", ref passed);
-            Reject(scratch, Valid.Replace("<key>PaxId</key>", "<key>firstname</key>"), "one key on two recognizers, ignoring case", ref passed, "declared twice");
-            Reject(scratch, Valid.Replace("<key>SeatNumber</key>", "<key>PaxId</key>"), "one key on a recognizer and in the allow list", ref passed, "declared twice");
-            Reject(scratch, Valid.Replace("<allow_list match=\"regex\">", "<allow_list match=\"regex\"><!--").Replace("</allow_list>", "--></allow_list>"),
-                "an allow list without items or keys", ref passed);
+            Reject(scratch, Valid.Replace("<deny_list>MR MRS DR</deny_list>", ""), "a custom recognizer without a pattern or deny list", ref passed);
             Reject(scratch, Valid.Replace("type=\"replace\" new_value=\"[T]\"", "type=\"encrypt\" key=\"k\""), "the encrypt operator", ref passed);
             Reject(scratch, Valid.Replace("type=\"replace\" new_value=\"[T]\"", "type=\"custom\""), "the custom operator", ref passed);
             Reject(scratch, Valid.Replace("type=\"replace\" new_value=\"[T]\"", "type=\"surrogate_ahds\""), "the surrogate_ahds operator", ref passed);
@@ -126,6 +122,20 @@ public static class RecognizerFileChecks
             Reject(scratch, Valid.Replace("<context>DOCS NAME</context>", "<context>DOCS</context><rule />"), "an unknown child element", ref passed);
             Reject(scratch, Valid.Replace("</recognizers>", "<rule /></recognizers>"), "an unknown element", ref passed);
             Reject(scratch, Valid.Replace("type=\"predefined\"", "type=\"predefined\" colour=\"red\""), "an unknown attribute", ref passed);
+            Reject(scratch, Valid.Replace("</recognizers>", "<entity_mapping><key name=\"LastName\" entity=\"PERSON\" /></entity_mapping></recognizers>"), "a second entity_mapping", ref passed);
+            Reject(scratch, Valid.Replace("</recognizers>", "<keys_to_skip><key name=\"LinkType\" /></keys_to_skip></recognizers>"), "a second keys_to_skip", ref passed);
+            Reject(scratch, Valid.Replace("<key name=\"DOB\" entity=\"DATE_OF_BIRTH\" />", "<key name=\"DOB\" entity=\"DATE_OF_BIRTH\" /><key name=\"dob\" entity=\"PERSON\" />"),
+                "a key mapped twice, ignoring case", ref passed, "twice");
+            Reject(scratch, Valid.Replace("<key name=\"FlightLegRefId\" />", "<key name=\"firstname\" />"), "a key both mapped and skipped", ref passed, "both mapped");
+            Reject(scratch, Valid.Replace("entity=\"DATE_OF_BIRTH\" />", "entity=\"date_of_birth\" />"), "a lower-case mapped entity", ref passed);
+            Reject(scratch, Valid.Replace("entity=\"DATE_OF_BIRTH\" />", "entity=\"DEFAULT\" />"), "DEFAULT as a mapped entity", ref passed);
+            Reject(scratch, Valid.Replace("<key name=\"FlightLegRefId\" />", "<key name=\"*\" />"), "the array wildcard as a key name", ref passed);
+            Reject(scratch, Valid.Replace("<key name=\"FlightLegRefId\" />", "<key />"), "a key without a name", ref passed);
+            Reject(scratch, Valid.Replace("<key name=\"FlightLegRefId\" />", "<key name=\"FlightLegRefId\" entity=\"PERSON\" />"), "an entity on a skipped key", ref passed);
+            Reject(scratch, Valid.Replace("<key name=\"FlightLegRefId\" />", "<key name=\"FlightLegRefId\">x</key>"), "a key with content", ref passed);
+            Reject(scratch, Valid.Replace("<key name=\"FlightLegRefId\" />", "<item>FlightLegRefId</item>"), "an unknown child of keys_to_skip", ref passed);
+            Reject(scratch, Valid.Replace("<entity_mapping>", "<entity_mapping match=\"path\">"), "an attribute on entity_mapping", ref passed);
+            Reject(scratch, Valid.Replace("<key name=\"UARecloc\" />", "").Replace("<key name=\"FlightLegRefId\" />", ""), "an empty keys_to_skip", ref passed, "at least one");
             // Elements and attributes of the earlier format fail loudly instead of being ignored.
             Reject(scratch, Valid.Replace("</recognizers>", "<builtIn entity=\"PERSON\" /></recognizers>"), "a retired <builtIn>", ref passed, "no longer supported");
             Reject(scratch, Valid.Replace("</recognizers>", "<keep name=\"time\"><pattern>\\d{4}</pattern></keep></recognizers>"), "a retired <keep>", ref passed, "no longer supported");

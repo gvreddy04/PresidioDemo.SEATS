@@ -7,14 +7,12 @@ namespace PresidioDemo.Core.Models;
 
 // Locations address fields within one message; they are never passenger identities.
 /// <summary>
-/// Identifies one scalar value by its instance path and configured protection-policy path.
+/// Identifies one scalar value by its instance path (a JSON Pointer) and its wildcard key path.
 /// </summary>
 /// <param name="Id">The instance path locating this scalar within one message; it is not passenger identity.</param>
-/// <param name="Name">The declared field name or reviewed layout identifier.</param>
+/// <param name="Name">The wildcard key path, with array indexes as <c>*</c>.</param>
 /// <param name="Value">The original scalar value or decoded member associated with this declaration.</param>
-/// <param name="Offset">The payload byte offset of the string's first text byte, or null for a field the codec does not
-/// locate by offset, such as a JSON field, which its JSON Pointer identifier locates.</param>
-public sealed record FeedField(string Id, string Name, string Value, int? Offset = null);
+public sealed record FeedField(string Id, string Name, string Value);
 
 /// <summary>
 /// Combines extracted protection fields with the codec&apos;s retained serialization layout.
@@ -123,7 +121,7 @@ public sealed record FeedEnvelope(byte[] Payload, byte[] Original, string Format
 #endregion
 
 /// <summary>
-/// Separates transport metadata from payload without interpreting proprietary binary records.
+/// Separates transport metadata from payload without interpreting the payload itself.
 /// </summary>
 public static class FeedPayloadReader
 {

@@ -83,15 +83,15 @@ foreach (string path in samples)
     Check(protectedContent.Length == original.Length && afterMask.Header == envelope.Header && afterMask.HexRowBytes == envelope.HexRowBytes
         && Independent(afterMask.Payload).All(field => field.Value == masked[field.Id]), name + ": same-width masks keep the length, metadata and every other value");
 
-    // The recognizer keys protect their values with their anonymizers; allowed keys and every other value stay unchanged.
+    // The mapped keys protect their values with their anonymizers; skipped keys and every other value stay unchanged.
     var protectedByKey = parsed.Fields.ToDictionary(f => f.Id, f => ByKey(recognizers, f, stringIds));
     byte[] keyed = codec.Serialize(parsed, protectedByKey);
     codec.Validate(parsed, keyed);
     var independentAfter = Independent(FeedPayloadReader.Read(Message(keyed, name)).Payload);
     Check(independentAfter.Count == independent.Count && independentAfter.All(field => field.Value == protectedByKey[field.Id])
         && protectedByKey.Count(pair => pair.Value != unchanged[pair.Key]) > 0, name + ": the independent reader confirms every key protection and kept value");
-    Check(independent.Where(f => recognizers.AllowList.AllowsKey(Key(f.Name))).All(f => protectedByKey[f.Id] == f.Value),
-        name + ": allowed keys, including the PNR, stay unchanged");
+    Check(independent.Where(f => recognizers.Skips(JsonFeedParser.PropertyNames(f.Name))).All(f => protectedByKey[f.Id] == f.Value),
+        name + ": skipped keys, including the PNR, stay unchanged");
     var reparsed = codec.Parse(Message(keyed, name));
     Check(codec.Serialize(reparsed, reparsed.Fields.ToDictionary(f => f.Id, f => f.Value)).AsSpan().SequenceEqual(keyed), name + ": the protected export parses and re-encodes exactly");
 
@@ -150,19 +150,16 @@ Reject(() => codec.Parse(Message(Encoding.UTF8.GetBytes(export.Replace("1208", "
 
 Console.WriteLine($"PASS Generic JSON codec checks complete | {samples.Length} files | {compared} baseline locations | {checks} checks");
 
-// Returns the protection a recognizer key gives a string, as the protector applies it; every other value is unchanged.
+// Returns the protection a mapped key gives a string, as the protector applies it; every other value is unchanged.
 static string ByKey(RecognizerFile file, FeedField field, IReadOnlySet<string> strings)
 {
     if (!strings.Contains(field.Id) || field.Value.Length == 0)
     {
         return field.Value;
     }
-    var recognizer = field.Name.Split('/').Where(s => s.Length > 0 && s != "*").Reverse().Select(file.RecognizerForKey).FirstOrDefault(r => r is not null);
-    return recognizer is null ? field.Value : FeedAnonymizer.Apply(file.ActionFor(recognizer.Entity).Action, recognizer.Entity, field.Value).Text;
+    string? entity = file.MappedEntity(JsonFeedParser.PropertyNames(field.Name));
+    return entity is null ? field.Value : FeedAnonymizer.Apply(file.ActionFor(entity).Action, entity, field.Value).Text;
 }
-
-// Returns the JSON property name of a wildcard field path: its last segment that is not an array position.
-static string Key(string name) => name.Split('/').LastOrDefault(s => s.Length > 0 && s != "*") ?? "";
 
 static int CountStrings(JsonElement element) => element.ValueKind switch
 {

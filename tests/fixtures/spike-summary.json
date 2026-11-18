@@ -23,11 +23,11 @@
     "rounds": 20,
     "messages": 40,
     "nlpNer": "on (spaCy en_core_web_lg)",
-    "messagesPerSecondPerTask": 847.1,
+    "messagesPerSecondPerTask": 1184.4,
     "feeds": [
       {
         "feed": "Seats",
-        "messagesPerSecondPerTask": 862.1,
+        "messagesPerSecondPerTask": 1210.1,
         "tasks": 1
       }
     ],

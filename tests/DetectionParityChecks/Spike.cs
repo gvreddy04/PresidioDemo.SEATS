@@ -13,8 +13,8 @@ namespace PresidioDemo.DetectionParity;
 /// One approved parity exception: a baseline-protected value that decoded-text detection publishes (W-011, W-016).
 /// </summary>
 /// <param name="Sample">The sample file name.</param>
-/// <param name="Location">The baseline location.</param>
-/// <param name="Reason">Why it is published, one reason per category of value.</param>
+/// <param name="Location">The baseline location (a JSON Pointer).</param>
+/// <param name="Reason">Why it is published, one reason per category.</param>
 /// <param name="ApprovedBy">Who approved it, when recorded; optional (WR-019).</param>
 public sealed record ParityException(string Sample, string Location, string Reason, string? ApprovedBy = null);
 
@@ -71,7 +71,7 @@ public static class Spike
         foreach (var entry in baseline.Protected)
         {
             var result = byName[entry.Sample];
-            var (isCaught, before, after, evt) = Inspect(result, entry.Location, entry.Length);
+            var (isCaught, before, after, evt) = Inspect(result, entry.Location);
             if (isCaught)
             {
                 caught.Add(entry);
@@ -121,9 +121,8 @@ public static class Spike
     /// </summary>
     /// <param name="result">The sample result.</param>
     /// <param name="location">The JSON Pointer.</param>
-    /// <param name="length">The value length.</param>
-    /// <returns>Caught when every non-<c>*</c> character changed (a value that is all <c>*</c> was masked before it arrived).</returns>
-    private static (bool Caught, string Before, string After, DetectionEvent? Event) Inspect(SampleResult result, string location, int length)
+    /// <returns>Caught when every non-<c>*</c> character changed, or a value of another length differs.</returns>
+    private static (bool Caught, string Before, string After, DetectionEvent? Event) Inspect(SampleResult result, string location)
     {
         string before = Value(result.Original, result, location);
         if (result.Output is null)
@@ -136,14 +135,16 @@ public static class Spike
     }
 
     /// <summary>
-    /// Returns the string at a JSON Pointer in a message, read with the feed's codec, or empty when it is missing.
+    /// Returns the decoded JSON value at a pointer in a message.
     /// </summary>
-    private static string Value(byte[] message, SampleResult result, string location) =>
-        DetectionRun.Codec(result.Feed).Parse(new FeedMessage(new FeedDelivery(result.Feed, Guid.NewGuid(), Path.GetFileName(result.Path), result.Path), message))
-            .Fields.SingleOrDefault(field => field.Id == location)?.Value ?? "";
+    private static string Value(byte[] message, SampleResult result, string location)
+    {
+        var parsed = DetectionRun.Codec(result.Feed).Parse(new FeedMessage(new FeedDelivery(result.Feed, Guid.NewGuid(), Path.GetFileName(result.Path), result.Path), message));
+        return parsed.Fields.Single(field => field.Id == location).Value;
+    }
 
     /// <summary>
-    /// Returns the event of the decoded string at a location.
+    /// Returns the event of the decoded string at a pointer.
     /// </summary>
     private static DetectionEvent? Containing(SampleResult result, string location)
     {
@@ -157,8 +158,8 @@ public static class Spike
 
     /// <summary>
     /// Measures messages per second for one process (one ECS task) with spaCy NER on, and the task count that sustains
-    /// the Seats feed's sizing peak of 400 messages per second (its equal share of the 2,000 messages per second sized for
-    /// the five airline feeds before each feed got its own worker).
+    /// the Seats feed's sizing peak of 400 messages per second (its share of the 2,000 messages per second sized
+    /// for the airline feeds before this worker kept Seats only).
     /// </summary>
     private static async Task<object> Throughput(DetectingFeedProtector protector, IReadOnlyList<string> samples, int rounds)
     {
