@@ -32,7 +32,7 @@ Counts below describe JSON scalar occurrences under the removed field policies, 
 | SEATS_03.txt | 1,329 | 32 | 19 Replace |
 | SEATS_02_Negative_Testing.txt | 1,362 | Rejected | MQ export without UTF-8 CCSID 1208 |
 
-With decoded-text detection, `SEATS.txt` and `SEATS_03.txt` are published through the real worker and local Presidio, and `SEATS_02_Negative_Testing.txt` is dead-lettered with the same reason. All 48 values the former field policies protected (names, passenger and order IDs, the employee ID and the seat attribute codes) are protected by the `<entity_mapping>` keys of `seats.xml`, so there are no approved exceptions. Both PNR occurrences stay unchanged, under the skipped `UARecloc` key. `SEATS.txt` has 29 changed and 29 allowed strings, `SEATS_03.txt` 19 and 31; the extra kept occurrence of the removed design is the number `OrderVersion`, which is not a string. Source hashes, payload sizes, numbers, property names, grouping, MQ headers, row framing and newline style are preserved.
+With decoded-text detection, `SEATS.txt` and `SEATS_03.txt` are published through the real worker and local Presidio, and `SEATS_02_Negative_Testing.txt` is dead-lettered with the same reason. These results use the shipped `Presidio:DefaultDetection` (off). The safety check is names-only: the 6 names among the 48 values the former field policies protected are masked by the name keys of `seats.xml`, so there are no approved exceptions, and the other 42 (passenger and order IDs, the employee ID and the seat attribute codes) are reported as out of scope. Both PNR occurrences stay unchanged, under the skipped `UARecloc` key. `SEATS.txt` has 3 changed, 29 allowed and 26 review strings, `SEATS_03.txt` 3, 31 and 16; the review strings are the IDs and attribute codes the file no longer maps, in which nothing is detected. Source hashes, payload sizes, numbers, property names, grouping, MQ headers, row framing and newline style are preserved.
 
 ## Configuration behavior (removed design)
 
@@ -44,12 +44,14 @@ Each string is decided on its own, in this order:
 
 | Step | Recognizer file element | Example keys | Result |
 | --- | --- | --- | --- |
-| 1 | `<entity_mapping>` | `FirstName`, `LastName`, `MiddleName`, `BookedAsName`, `PaxId`, `OrderId`, `EmpId`, `Attributes`, `IATAAttributes`, `TTYAttributes` | The whole string is the mapped entity and gets that entity's anonymizer. All of these mask with `*` at the same width. |
+| 1 | `<entity_mapping>` | `FirstName`, `LastName`, `MiddleName`, `BookedAsName` (names only) | The whole string is `PERSON` and is masked with `*` at the same width. No other key is mapped: `PaxId`, `OrderId`, `EmpId` and the attribute keys are out of the names-only scope. |
 | 2 | `<keys_to_skip>` | `UARecloc`, `pnr`, seat number, cabin and booking class, service and flight references, timestamps, status, channel and agent | The string is published unchanged without analysis. The record locator links the booking, so it stays unchanged. |
 | 3 | `<allow_list>` | none: the item is a timestamp shape | A string that matches an item end to end is published unchanged. |
 | 4 | Presidio | any key the file does not name | Local Presidio analyzes the string. The property names of its key path are passed as Presidio context words, as Presidio's own `analyze_dict` passes a key. Each span at or above the threshold gets its entity's anonymizer; a string with nothing detected is published unchanged and listed for review. |
 
-A key is matched ignoring case, anywhere on the key path. The innermost mapped name wins. A number or boolean under a mapped key cannot be protected in its JSON type, so the message is dead-lettered (WR-016). In the supplied samples every string is decided in step 1 or 2.
+A key is matched ignoring case, anywhere on the key path. The innermost mapped name wins. A number or boolean under a mapped key cannot be protected in its JSON type, so the message is dead-lettered (WR-016). In the supplied samples the IDs and attribute codes reach step 4.
+
+Which recognizers run in step 4 depends on `Presidio:DefaultDetection`. Off (the shipped default), only the file's custom recognizer `passengerName` runs, so only the names act; the predefined recognizers and spaCy do not run. On, Presidio's predefined recognizers (email, phone, credit card, spaCy `PERSON`, `LOCATION`, `DATE_TIME` and the rest) run as well, and the skipped keys and the allow list keep the operational values away from them.
 
 ## Reviewed field names
 
@@ -58,10 +60,10 @@ JSON property paths are unchanged from the producer.
 | Property | Entity in `seats.xml` | Evidence and limits |
 | --- | --- | --- |
 | `FirstName`, `LastName`, `MiddleName`, `BookedAsName` | `PERSON` (`passengerName`) | Names of one customer; `BookedAsName` is `SURNAME/GIVEN`, which the name pattern also finds under any other property |
-| `PaxId` | `PASSENGER_ID` | Passenger identifier within the order; not a stable identity across orders |
-| `OrderId` | `ORDER_ID` | The order the event belongs to |
-| `EmpId` | `EMPLOYEE_ID` | The employee or service account that made the change |
-| `Attributes`, `IATAAttributes`, `TTYAttributes` | `SENSITIVE_ATTRIBUTE` | Seat and passenger attribute codes, some of which describe health, age or custody; every value of the array |
+| `PaxId` | not mapped (names only) | Passenger identifier within the order; not a stable identity across orders. The removed design protected it as `PASSENGER_ID` |
+| `OrderId` | not mapped (names only) | The order the event belongs to. Formerly `ORDER_ID` |
+| `EmpId` | not mapped (names only) | The employee or service account that made the change. Formerly `EMPLOYEE_ID` |
+| `Attributes`, `IATAAttributes`, `TTYAttributes` | not mapped (names only) | Seat and passenger attribute codes, some of which describe health, age or custody. Formerly `SENSITIVE_ATTRIBUTE` |
 | `UARecloc` | skipped | The record locator (PNR), published unchanged; `pnr` is skipped for the same reason |
 
 ## Reproduce verification

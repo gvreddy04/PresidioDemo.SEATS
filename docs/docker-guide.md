@@ -140,7 +140,7 @@ In `deploy\.env.dev`, replace the DemoAir stand-ins with the real Dev values:
 
 - `SOLACE_PASSWORD`, `Solace__Host`, `Solace__Vpn` and `Solace__Username`.
 - `Solace__ClientName`: a name of your own. The broker disconnects an existing connection that uses the same client name.
-- The input queue, output topic and dead-letter queue of the Seats route, which is route 0 (`Messaging__Routes__0__…`). The template leaves them empty, because no Dev queue or topic names have been supplied for Seats and the Dev section of `appsettings.json` has no route; the worker stops at startup until they are filled in. Settings that still name another feed stop startup with a message naming the route index and the feed.
+- The input queue, output topic and dead-letter queue of the Seats route, which is route 0 (`Messaging__Routes__0__…`). Settings that still name another feed stop startup with a message naming the route index and the feed.
 
 `deploy\.env.dev` is git-ignored. Never commit it, and never copy real values into a committed file.
 

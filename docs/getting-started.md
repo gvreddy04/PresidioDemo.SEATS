@@ -204,13 +204,13 @@ if ($failed.Count -eq 0) { Write-Host "All .NET checks passed." -ForegroundColor
 **You should see:** `All .NET checks passed.` `Messaging.ContractTests` prints `SKIP Solace contract ...` here; it
 runs against the broker in step 20.
 
-**Python unit tests** (46 tests, about 1–2 minutes; they load Presidio):
+**Python unit tests** (55 tests, about 1–2 minutes; they load Presidio):
 
 ```powershell
 src\.venv\Scripts\python -m unittest discover -s tests/unit-tests
 ```
 
-**You should see:** `Ran 46 tests` and `OK`.
+**You should see:** `Ran 55 tests` and `OK`.
 
 **End-to-end sample check.** This sends the three files in `docs/sample-docs/Seats` through the real feed worker and
 embedded Presidio, over the in-memory broker:
@@ -219,8 +219,10 @@ embedded Presidio, over the in-memory broker:
 src\.venv\Scripts\python tests/run_sample_verification.py
 ```
 
-**You should see:** `"Published": 2`, `"Rejected": 1` and `"all_checks_passed": true`. The rejected file is the
-negative sample `SEATS_02_Negative_Testing.txt`, whose MQ export is not UTF-8; it is rejected by design.
+**You should see:** `"Published": 2`, `"Rejected": 1`, `"protected": 6`, `"out_of_scope": 42` and
+`"all_checks_passed": true`. The check is names-only: the 6 passenger names of the frozen baseline must be masked, and
+its 42 other values (IDs and seat attribute codes) are reported as out of scope. The rejected file is the negative
+sample `SEATS_02_Negative_Testing.txt`, whose MQ export is not UTF-8; it is rejected by design.
 
 Test output goes to `.test-runs\` (git-ignored). Some files there contain the original, unprotected sample data;
 never copy them elsewhere.
@@ -323,10 +325,11 @@ dotnet run --project src/PresidioDemo.Worker
 **You should see**, within about 10 seconds:
 
 ```
-PRESIDIO FEED WORKER | environment Local | Ctrl+C or SIGTERM stops after the current messages.
+PRESIDIO FEED WORKER | environment Local | default detection off | Ctrl+C or SIGTERM stops after the current messages.
 info: ...SolaceConnection[0] Provisioned 2 Solace queues on the local broker.
 info: ...SolaceConnection[0] Connected to Solace tcp://localhost:55555 (VPN default) as presidio-worker-local.
 info: ...FeedWorkerService[0] Initializing embedded local Presidio and the bundled NLP model...
+info: ...FeedWorkerService[0] Default detection off: only the recognizer files' custom recognizers and mapped keys act; Presidio's predefined recognizers and spaCy NER do not run.
 info: ...Worker.Seats[0] Seats worker reading q.seats.raw; output airline/seats/protected; dead letter q.seats.dlq.
 info: ...FeedWorkerService[0] READY: 1 feed workers on Solace.
 ```
@@ -472,7 +475,7 @@ Use the Try-Me **Publisher** to put a hand-typed message on an input queue, for 
 
 1. **Try Me!** → **Publisher** → **Connect** (same defaults as the subscriber).
 2. Select **Queue**, enter `q.seats.raw`, and select **Persistent**.
-3. In **Message Content** enter `{"PaxId":1001}` and click **Publish**.
+3. In **Message Content** enter `{"FirstName":1001}` and click **Publish**.
 
 **You should see**, in the worker window:
 
@@ -481,7 +484,7 @@ warn: ...Worker.Seats[0] Seats 19de...bb49 DEAD-LETTERED to queue:q.seats.dlq | 
 ```
 
 The worker treats a Try-Me message as a **raw** payload, because Try-Me sends no `presidio-payload-format` header.
-`{"PaxId":1001}` is valid JSON, but `PaxId` is an `<entity_mapping>` key and a number cannot be masked in its JSON type, so
+`{"FirstName":1001}` is valid JSON, but `FirstName` is an `<entity_mapping>` key and a number cannot be masked in its JSON type, so
 it is rejected. A message such as `{"hello":"world"}` would be published, because nothing in it is detected. If
 Try-Me is consuming `q.seats.dlq`
 (step 18), the rejected message appears there straight away.
@@ -550,11 +553,13 @@ environment's section, then environment variables (`__` separates levels). Set a
 |---|---|
 | `$env:Messaging__Feed = "Seats"` | The worker consumes only the Seats feed |
 | `$env:Messaging__ConsumersPerTask = "4"` | 4 consumers per input queue (1–32) |
+| `$env:Presidio__DefaultDetection = "true"` | Presidio's predefined recognizers (email, phone, credit card, spaCy `PERSON` and the rest) run beside the recognizer file; `false`, the default, acts only on what the file defines |
 | `$env:Logging__LogLevel__Default = "Warning"` | Only warnings and errors, such as dead letters |
 
 The feed protection rules are in `src/PresidioDemo.Core/Configuration/recognizers/seats.xml`: custom recognizers,
 `<entity_mapping>` keys (the whole value is the entity), `<keys_to_skip>` keys (published unchanged), the allow list and
-the anonymizers, in the same format as the PNR-Linking worker. The build copies it next to the worker.
+the anonymizers, in the same format as the PNR-Linking worker. The build copies it next to the worker. It defines passenger
+names only (`PERSON`); with `Presidio:DefaultDetection` off, as shipped, nothing else is protected.
 
 ## Troubleshooting
 
