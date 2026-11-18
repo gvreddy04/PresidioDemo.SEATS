@@ -2,15 +2,15 @@
 
 Diagram: [aws-solace-ecs-deployment.svg](diagrams/aws-solace-ecs-deployment.svg). The diagram keeps its wording generic. Specific values are on this page: connection settings, producers, consumers, queue mapping, sizing numbers, delivery counts and worker setting names. Review this page with the pipeline and infrastructure team before requesting resources. Names use the DemoAir stand-ins; real values are supplied at deploy time only.
 
-This branch (`PNR-Worker`) runs the PNR feed only, so this plan covers one feed service.
+This repository is the Seats worker: it runs the Seats feed only, so this plan covers one feed service.
 
-Decoded-text detection is an initial POC: deploy it to Dev only, through the image built from the reviewed pull request. QA and production wait until a later change approves the listed misses in [tests/fixtures/parity-exceptions.json](../tests/fixtures/parity-exceptions.json) (PR-005).
+Decoded-text detection is an initial POC: deploy it to Dev only, through the image built from the reviewed pull request. QA and production wait for a later change that approves it; for Seats, [tests/fixtures/parity-exceptions.json](../tests/fixtures/parity-exceptions.json) lists no miss (PR-005).
 
 ## How it works
 
-Harness CI builds the repository `Dockerfile` into one image. A .NET 10 SDK stage publishes the worker, and the runtime stage adds CPython 3.12, `presidio-analyzer` and `presidio-anonymizer` 2.2.364, and the spaCy `en_core_web_lg` model. CI tags the image with the git commit and pushes it to Amazon ECR. Harness CD then registers the PNR task definition that points at that tag and rolls the ECS Fargate service onto it. The tasks have no load balancer and no inbound ports. At start-up, ECS reads the Solace password from Secrets Manager into `SOLACE_PASSWORD`, and the rest of the settings come from `appsettings.json` and task environment variables.
+Harness CI builds the repository `Dockerfile` into one image. A .NET 10 SDK stage publishes the worker, and the runtime stage adds CPython 3.12, `presidio-analyzer` and `presidio-anonymizer` 2.2.364, and the spaCy `en_core_web_lg` model. CI tags the image with the git commit and pushes it to Amazon ECR. Harness CD then registers the Seats task definition that points at that tag and rolls the ECS Fargate service onto it. The tasks have no load balancer and no inbound ports. At start-up, ECS reads the Solace password from Secrets Manager into `SOLACE_PASSWORD`, and the rest of the settings come from `appsettings.json` and task environment variables.
 
-The PNR feed runs as its own ECS service. The service always keeps at least one task and scales out up to the number of partitions in the PNR input queue (see [Scalability](#scalability)). The input queue is partitioned by PNR, so the messages for one PNR stay in order while tasks run in parallel. Each task reads the queue one message at a time over the native Solace client using TLS. It decodes the message with the generic XDR decoder, detects and masks personal data through Presidio running in the same process via Python.NET, validates and serializes the output, and publishes it to the feed's output topic. The task acknowledges the input only after the broker confirms the publish. The worker sends a rejected message, or one delivered more than 5 times, to the feed's dead letter queue, never to output. As a backstop, the broker moves a message to the same DLQ after 10 deliveries. The PII path makes no HTTP calls and uses no remote services.
+The Seats feed runs as its own ECS service. The service always keeps at least one task and scales out up to the number of partitions in the Seats input queue (see [Scalability](#scalability)). The input queue is partitioned by PNR, so the messages for one PNR stay in order while tasks run in parallel. Each task reads the queue one message at a time over the native Solace client using TLS. It parses the JSON message with the shared System.Text.Json parser, detects and masks personal data through Presidio running in the same process via Python.NET, validates and serializes the output, and publishes it to the feed's output topic. The task acknowledges the input only after the broker confirms the publish. The worker sends a rejected message, or one delivered more than 5 times, to the feed's dead letter queue, never to output. As a backstop, the broker moves a message to the same DLQ after 10 deliveries. The PII path makes no HTTP calls and uses no remote services.
 
 ## Resource list
 
@@ -20,14 +20,14 @@ The Existing? column records what we assume; confirm each row with the platform 
 |---|---|---|---|
 | 1 | ECR repository | `presidio-worker`, scan on push, immutable tags; image about 1.8 GB, linux/amd64 | New |
 | 2 | ECS cluster | Fargate capacity | Reuse if one exists |
-| 3 | ECS task definition, 1 | `presidio-worker-pnr-dev`; 1 vCPU, 4 GB; `stopTimeout` 40 s; `DOTNET_ENVIRONMENT=Dev`; `Messaging__Feed=PNR` and the PNR route (route 0); `Solace__*` environment variables; `secrets` entry for `SOLACE_PASSWORD`; `awslogs` driver with `awslogs-multiline-pattern` set to `^\S`, so each detection block (one header line, then indented lines) arrives as one log event; every other worker line starts in the first column | New (Harness registers it) |
-| 4 | ECS service, 1 | The PNR service; min 1 task; no load balancer; rolling deploy | New |
-| 4a | Service auto scaling, 1 | Min sized for the normal peak; scheduled actions raise it before holidays; CPU target tracking at 60 % with parallel consumers; max = the PNR queue's partition count | New |
+| 3 | ECS task definition, 1 | `presidio-worker-seats-dev`; 1 vCPU, 4 GB; `stopTimeout` 40 s; `DOTNET_ENVIRONMENT=Dev`; `Messaging__Feed=Seats` and the Seats route (route 0: `Messaging__Routes__0__Feed`, `…Input`, `…Output`, `…DeadLetter`, which the Dev section of `appsettings.json` does not hold); `Solace__*` environment variables; `secrets` entry for `SOLACE_PASSWORD`; `awslogs` driver with `awslogs-multiline-pattern` set to `^\S`, so each detection block (one header line, then indented lines) arrives as one log event; every other worker line starts in the first column | New (Harness registers it) |
+| 4 | ECS service, 1 | The Seats service; min 1 task; no load balancer; rolling deploy | New |
+| 4a | Service auto scaling, 1 | Min sized for the normal peak; scheduled actions raise it before holidays; CPU target tracking at 60 % with parallel consumers; max = the Seats queue's partition count | New |
 | 5 | Task execution role | `ecr:GetAuthorizationToken` and image pull; `logs:CreateLogStream` and `PutLogEvents`; `secretsmanager:GetSecretValue` on the one secret; `kms:Decrypt` if a customer-managed key is used | New |
 | 6 | Task role | Not needed, because the worker calls no AWS API | — |
 | 7 | Secrets Manager secret | `piidemo/dev/solace`, JSON key `password`; the broker owner sets the value | New |
 | 8 | KMS key | For the secret and the log group | Reuse an existing key, or the AWS-managed key |
-| 9 | CloudWatch log group and alarms | `/ecs/presidio-worker-pnr-dev`, with 30-day retention; CPU alarms for scaling; an alarm when the service's running task count drops below 1. With `Presidio__DetectionLog=true` the worker writes one detection block per message; without the multiline pattern in row 3, each block line is its own event, still adjacent and filterable by transaction ID. While both `Presidio__DetectionLog=true` and `Presidio__DetectionLogValues=true` are in effect (values are allowed in Dev or QA only), the detection blocks carry actual personal values. `DetectionLogValues` is on by default, so switching `Presidio__DetectionLog=true` on in Dev or QA starts writing values unless the task definition also sets `Presidio__DetectionLogValues=false`: before both are on, set the log group's retention to at most 7 days and limit reading to the PII team role; switch either flag only through a reviewed task-definition deploy, and restore the normal retention after the detection log or the values flag is off again (PR-006) | New |
+| 9 | CloudWatch log group and alarms | `/ecs/presidio-worker-seats-dev`, with 30-day retention; CPU alarms for scaling; an alarm when the service's running task count drops below 1. With `Presidio__DetectionLog=true` the worker writes one detection block per message; without the multiline pattern in row 3, each block line is its own event, still adjacent and filterable by transaction ID. While both `Presidio__DetectionLog=true` and `Presidio__DetectionLogValues=true` are in effect (values are allowed in Dev or QA only), the detection blocks carry actual personal values. `DetectionLogValues` is on by default, so switching `Presidio__DetectionLog=true` on in Dev or QA starts writing values unless the task definition also sets `Presidio__DetectionLogValues=false`: before both are on, set the log group's retention to at most 7 days and limit reading to the PII team role; switch either flag only through a reviewed task-definition deploy, and restore the normal retention after the detection log or the values flag is off again (PR-006) | New |
 | 10 | VPC and private subnets | Subnets that can route to the Solace broker | Reuse |
 | 11 | Security group | No inbound rules; outbound TCP 55443 to the broker and 443 to the VPC endpoints | New |
 | 12 | VPC endpoints, or NAT | `ecr.api`, `ecr.dkr`, S3 gateway, `logs`, `secretsmanager` (platform traffic only) | Reuse if present |
@@ -37,17 +37,17 @@ The Existing? column records what we assume; confirm each row with the platform 
 
 ## Scalability
 
-**Target:** 400 messages per second for the PNR feed. This is the PNR share of the 2,000 messages per second sized for the airline feeds before this branch kept PNR only; the real PNR peak is still to be confirmed.
+**Target:** 400 messages per second for the Seats feed. This is its equal share of the 2,000 messages per second sized for the five airline feeds before each feed got its own worker; the real Seats peak is still to be confirmed.
 
 **Decided:**
 
-- **Parallel consumers per task.** Each task opens several broker flows, so far fewer new tasks ever start. Built: set `Messaging__ConsumersPerTask` in the task definition, such as `8`, once the PNR queue is partitioned. All consumers share the task's one broker connection.
-- **Numbers:** 8 consumers per task and 32 partitions, so at most 4 tasks for the PNR feed. If the PNR feed needs more tasks, raise its partitions; no code change is needed.
+- **Parallel consumers per task.** Each task opens several broker flows, so far fewer new tasks ever start. Built: set `Messaging__ConsumersPerTask` in the task definition, such as `8`, once the Seats queue is partitioned. All consumers share the task's one broker connection.
+- **Numbers:** 8 consumers per task and 32 partitions, so at most 4 tasks for the Seats feed. If the Seats feed needs more tasks, raise its partitions; no code change is needed.
 - **Start tasks before they're needed.** The service's minimum is sized for the normal peak (one task). Scheduled scaling raises the minimum before holidays, so slow task start-up rarely matters. CPU target tracking at 60 % handles the rest, up to the partition count.
 
-**What one message costs:** decoded-text detection runs local Presidio on every decoded string, with spaCy NER on. In the detection spike (the 2 PNR samples, 20 rounds, one process, no broker) one task handled about 8 PNR messages per second with every Presidio predefined recognizer on (8.2 in the run recorded below); before every predefined recognizer ran, runs on the same workstation measured 11 to 13, and runs varied by up to about a quarter, so treat these as estimates. PNR messages are slow to detect because each holds about 90 strings. Presidio calls are serialized inside a task, so extra consumers per task overlap broker round trips but do not add detection throughput; scale with tasks. At about 8 per second, 400 per second needs about 49 tasks. That is more than the 4 tasks that 32 partitions and 8 consumers per task allow above, so the PNR queue needs more partitions, or fewer consumers per task, before it can scale that far. Confirm the real PNR peak before sizing. The figures come from `dotnet run --project tests/DetectionParityChecks -- spike` and are recorded in [tests/fixtures/spike-summary.json](../tests/fixtures/spike-summary.json). In production, the round trip to the broker adds to this.
+**What one message costs:** decoded-text detection decides each JSON string by its key first, and runs local Presidio, with spaCy NER on, only on strings under a property the recognizer file does not name. Every string of the two Seats samples sits under a recognizer key or an allowed key, so in the detection spike (the 2 published Seats samples, 20 rounds, one process, no broker) no string reached Presidio and one task handled about 850 messages per second (847.1 in the run recorded below); one task would carry the 400 per second target. That figure holds only while producers send the documented properties: each string under a new property goes to Presidio, and the PNR worker, whose strings all go to Presidio, measured about 8 messages per second for about 90 strings each. Presidio calls are serialized inside a task, so extra consumers per task overlap broker round trips but do not add detection throughput; scale with tasks. Confirm the real Seats peak, and how often messages carry undeclared properties, before sizing. The figures come from `dotnet run --project tests/DetectionParityChecks -- spike` and are recorded in [tests/fixtures/spike-summary.json](../tests/fixtures/spike-summary.json). In production, the round trip to the broker adds to this.
 
-The task counts and costs below were first sized for 2,000 messages per second; the figures here are one fifth of those, for the 400 per second PNR target, and do not include detection.
+The task counts and costs below were first sized for 2,000 messages per second; the figures here are one fifth of those, for the 400 per second Seats target, and do not include detection.
 
 | | One consumer per task (`ConsumersPerTask=1`) | Several consumers per task (chosen) |
 |---|---|---|
@@ -62,36 +62,36 @@ The task counts and costs below were first sized for 2,000 messages per second; 
 Limits to confirm before requesting infrastructure:
 
 - **Broker:** about 400 persistent messages per second in and the same out; one connection per task, and one flow per consumer on top; enough partitions for the service's maximum number of consumers.
-- **AWS:** a Fargate quota for the PNR task count above plus rolling deploys (about 40 tasks at the spike rate, so about 50 vCPU); about 100 free IP addresses in the subnets.
+- **AWS:** a Fargate quota for the Seats task count above plus rolling deploys (about 3–6 tasks, or more if many strings reach Presidio); about 100 free IP addresses in the subnets.
 - **Start-up time:** a new task pulls a 1.8 GB image and loads the spaCy model before it takes messages. Keep the service's minimum task count sized for the normal peak, and use scheduled scaling before holidays.
 
 Not measured yet: CPU per message on Fargate, real message sizes, and task start-up time. A load test in Dev should set the final task counts.
 
 ## Solace configuration
 
-Configured in `appsettings.json` (`Environments:Dev`): host `tcps://…:55443`, VPN, username, client name and the password variable name. The PNR route is configured, as route 0. Real values are applied as environment variables at deploy time.
+Configured in `appsettings.json` (`Environments:Dev`): host `tcps://…:55443`, VPN, username, client name and the password variable name. There is no Seats route: no Dev input queue, output topic or dead-letter queue name has been supplied for Seats, so the task definition must set route 0 (`Messaging__Routes__0__Feed=Seats` and its `Input`, `Output` and `DeadLetter`); without it the worker stops at startup. Real values are applied as environment variables at deploy time.
 
 Confirmed:
 
 - The broker is in AWS in the same region as the ECS tasks.
-- PNR comes from the reservation host through IBM MQ and Solace micro-integrations.
+- Seats comes from the operations apps into the same broker.
 - The masked output goes to the partner core system.
 
 Still needed from the broker owner:
 
-- A partitioned PNR input queue, 32 partitions, keyed by PNR. The publishers must set the key: the micro-integration must read the PNR from the binary host record, or receive it in an MQ header; confirm it can.
-- For the protected PNR topic: an output queue and its topic subscription, consumed by the partner core system. The partner should confirm it can take the PNR peak, and whether it needs the order kept for each PNR. The order is kept for now as the safe default.
-- The PNR dead letter queue, created by the broker team with the proposed `…DLQ.1` name and the same access limits as its input queue, because it holds raw PII.
-- The input queue's dead message queue set to the PNR DLQ, with max redelivery 10, as the broker backstop.
-- An ACL profile for `piidemo-app` that can consume the PNR input queue, publish to the protected PNR topic, and send to the PNR DLQ.
+- A Seats input queue in Dev, on the same broker, partitioned with 32 partitions and keyed by PNR. The publishers must set the key; the Seats JSON already carries a record-locator field (`UARecloc`).
+- For the protected Seats topic: an output queue and its topic subscription, consumed by the partner core system. The partner should confirm it can take the Seats peak, and whether it needs the order kept for each PNR. The order is kept for now as the safe default.
+- The Seats dead letter queue, created by the broker team with the proposed `…DLQ.1` name and the same access limits as its input queue, because it holds raw PII.
+- The input queue's dead message queue set to the Seats DLQ, with max redelivery 10, as the broker backstop.
+- An ACL profile for `piidemo-app` that can consume the Seats input queue, publish to the protected Seats topic, and send to the Seats DLQ.
 - Delivery count enabled on the input queue. Without it, the worker cannot count failed deliveries and move a failing message to its DLQ.
 - The broker CA certificate, if the broker does not use a public CA. It can be baked into the image under `/app/certs`, because it is not secret.
 
 ## Worker settings for the feed service
 
-- **One feed per task:** set `Messaging__Feed=PNR` in the task definition. The process then consumes only the PNR route. When it is empty, the process runs every routed feed, which on this branch is also only PNR.
+- **One feed per task:** set `Messaging__Feed=Seats` in the task definition. The process then consumes only the Seats route. When it is empty, the process runs every routed feed, which in this worker is also only Seats.
 - **Unique client name per task:** `Solace:UniqueClientName` is on in `Dev`. It appends the host name and a random part to `Solace:ClientName`, so scaled-out tasks don't disconnect each other. The host name on Fargate is the task's private address, so the name is traceable without the ECS metadata endpoint, which is an HTTP call.
-- **Routes:** the PNR route is route 0 (`Messaging__Routes__0__Input`, `…Output`, `…DeadLetter`). A task definition written for a build with more feeds, which put PNR at another index or names another feed, stops startup with a message naming the route index and the feed; rewrite it before deploying this image.
+- **Routes:** the Seats route is route 0 (`Messaging__Routes__0__Feed=Seats`, `…Input`, `…Output`, `…DeadLetter`), all supplied by the task definition, because the Dev section has no Seats route. A task definition written for another feed's worker, which names another feed such as PNR, stops startup with a message naming the route index and the feed; rewrite it before deploying this image.
 
 ## Solace password from Secrets Manager
 

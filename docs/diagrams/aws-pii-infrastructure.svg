@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1040" viewBox="0 0 1800 1040" role="img" aria-labelledby="title desc">
   <title id="title">PII infrastructure on AWS</title>
-  <desc id="desc">Proposed development infrastructure in a private AWS VPC for the PNR feed, drawn as one lane. PNR producers publish to the exclusive raw PNR queue on one Solace broker. One PNR listener task on ECS Fargate reads the queue one message at a time in arrival order. The listener decodes the binary XDR PNR message, protects PII, serializes it back to the original format, validates the output and publishes it to the protected PNR topic, which consumers read through a subscribed queue. PII is protected with .NET and local Presidio embedded through Python.NET (pythonnet, presidio-analyzer, presidio-anonymizer, en_core_web_lg) using the pnr.xml recognizer formats; the PNR stays unchanged. The listener connects with a native client; there are no HTTP or remote PII calls. Input is acknowledged only after the protected publish succeeds; messages not acknowledged after retries move to the PNR dead-message queue, which quarantines raw PII with no consumer access. The replay owner for quarantined messages is to be confirmed. Broker ACLs let the listener read the raw queue and consumers read the protected topic only. The broker is one EC2 instance in a single Availability Zone with an EBS volume and no high availability in dev, to be confirmed. VPC endpoints carry platform traffic to Amazon ECR, S3, CloudWatch Logs and Secrets Manager, outside the PII path. The producer and consumer connection type is to be confirmed. Broker connections use TLS and the broker EBS volume is KMS encrypted. Protection is irreversible masking at the same width, and delivery is at least once, so consumers may see duplicates. The Presidio model is bundled with no runtime download. To be confirmed: no internet egress from the VPC, broker admin through SSM only, ECR image scanning, broker credentials in Secrets Manager, CloudWatch alarms on queue and dead-message depth, no PII in logs, and the dead-message retry count, retention and replay owner.</desc>
-  <metadata>Project evidence: PresidioDemo.slnx; src/PresidioDemo.Worker/Program.cs; src/PresidioDemo.Worker/appsettings.json; src/PresidioDemo.Worker/Pipeline/FeedWorker.cs; src/PresidioDemo.Core/Decoder/PnrDecoder.cs; src/PresidioDemo.Core/Protection/DetectingFeedProtector.cs; src/PresidioDemo.Core/Protection/python/presidio_demo.py; src/PresidioDemo.Core/Configuration/recognizers/pnr.xml; src/PresidioDemo.Messaging.Solace/SolaceMessaging.cs. Current source runs one Solace consumer for the PNR feed (q.pnr.raw), validates output before publishing it to the protected topic, acknowledges the input only after the broker confirms, and sends rejected input to the restricted dead-letter queue; the exclusive queue, the dead-message queue, broker ACLs and AWS deployment are proposed. No external documents used as evidence.</metadata>
+  <desc id="desc">Proposed development infrastructure in a private AWS VPC for the Seats feed, drawn as one lane. The Seats producer publishes to the exclusive raw Seats queue on one Solace broker. One Seats listener task on ECS Fargate reads the queue one message at a time in arrival order. The listener parses the JSON Seats message, protects PII, serializes it back to the original format, validates the output and publishes it to the protected Seats topic, which consumers read through a subscribed queue. PII is protected with .NET and local Presidio embedded through Python.NET (pythonnet, presidio-analyzer, presidio-anonymizer, en_core_web_lg) using the seats.xml recognizer file, whose keys decide by JSON property; the PNR stays unchanged. The listener connects with a native client; there are no HTTP or remote PII calls. Input is acknowledged only after the protected publish succeeds; messages not acknowledged after retries move to the Seats dead-message queue, which quarantines raw PII with no consumer access. The replay owner for quarantined messages is to be confirmed. Broker ACLs let the listener read the raw queue and consumers read the protected topic only. The broker is one EC2 instance in a single Availability Zone with an EBS volume and no high availability in dev, to be confirmed. VPC endpoints carry platform traffic to Amazon ECR, S3, CloudWatch Logs and Secrets Manager, outside the PII path. The producer and consumer connection type is to be confirmed. Broker connections use TLS and the broker EBS volume is KMS encrypted. Protection is irreversible masking at the same width, and delivery is at least once, so consumers may see duplicates. The Presidio model is bundled with no runtime download. To be confirmed: no internet egress from the VPC, broker admin through SSM only, ECR image scanning, broker credentials in Secrets Manager, CloudWatch alarms on queue and dead-message depth, no PII in logs, and the dead-message retry count, retention and replay owner.</desc>
+  <metadata>Project evidence: PresidioDemo.slnx; src/PresidioDemo.Worker/Program.cs; src/PresidioDemo.Worker/appsettings.json; src/PresidioDemo.Worker/Pipeline/FeedWorker.cs; src/PresidioDemo.Core/Decoder/SeatsParser.cs; src/PresidioDemo.Core/Protection/DetectingFeedProtector.cs; src/PresidioDemo.Core/Protection/python/presidio_demo.py; src/PresidioDemo.Core/Configuration/recognizers/seats.xml; src/PresidioDemo.Messaging.Solace/SolaceMessaging.cs. Current source runs one Solace consumer for the Seats feed (q.seats.raw), validates output before publishing it to the protected topic, acknowledges the input only after the broker confirms, and sends rejected input to the restricted dead-letter queue; the exclusive queue, the dead-message queue, broker ACLs and AWS deployment are proposed. No external documents used as evidence.</metadata>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#3e556b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
     <marker id="arrowGrey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#8a9aab" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
@@ -20,7 +20,7 @@
   </defs>
   <rect width="1800" height="1040" fill="#ffffff"/>
   <text x="900" y="62" class="title">PII infrastructure on AWS</text>
-  <text x="900" y="100" class="note muted">Proposed dev · PNR feed · one queue and one listener</text>
+  <text x="900" y="100" class="note muted">Proposed dev · Seats feed · one queue and one listener</text>
 
   <rect x="240" y="140" width="1320" height="735" rx="24" fill="#ffffff" stroke="#9aabba" stroke-width="2"/>
   <text x="270" y="178" class="label start">Customer AWS account</text>
@@ -41,7 +41,7 @@
 
   <rect x="610" y="372" width="580" height="343" rx="21" class="box"/>
   <text x="900" y="404" class="heading">ECS Fargate</text>
-  <text x="900" y="430" class="note muted">One PNR task · one message at a time</text>
+  <text x="900" y="430" class="note muted">One Seats task · one message at a time</text>
 
   <!-- Stages inside the listener -->
   <rect x="629" y="450" width="72" height="30" rx="7" class="stage"/>
@@ -67,26 +67,26 @@
   <text x="1680" y="522" class="label">Consumers</text>
   <text x="1680" y="550" class="small muted">Link: to confirm</text>
 
-  <!-- PNR lane -->
+  <!-- Seats lane -->
   <g>
     <rect x="320" y="500" width="220" height="56" rx="10" class="raw"/>
     <rect x="640" y="500" width="520" height="56" rx="10" class="listener"/>
     <rect x="1260" y="500" width="220" height="56" rx="10" class="protected"/>
-    <text x="430" y="535" class="note">PNR</text>
-    <text x="900" y="535" class="note">PNR listener · binary XDR</text>
-    <text x="1370" y="535" class="note">PNR</text>
+    <text x="430" y="535" class="note">Seats</text>
+    <text x="900" y="535" class="note">Seats listener · JSON</text>
+    <text x="1370" y="535" class="note">Seats</text>
     <path d="M215 528H316" class="connection"/><path d="M540 528H636" class="connection"/><path d="M1160 528H1256" class="connection"/><path d="M1480 528H1581" class="connection"/>
   </g>
 
   <path d="M430 560V586" class="connection"/>
   <rect x="320" y="590" width="220" height="102" rx="10" class="dead"/>
-  <text x="430" y="616" class="note">PNR dead-message</text>
+  <text x="430" y="616" class="note">Seats dead-message</text>
   <text x="430" y="639" class="tiny muted">Retries: to confirm</text>
   <text x="430" y="660" class="tiny muted">Retention: to confirm</text>
   <text x="430" y="681" class="tiny muted">Replay owner: to confirm</text>
 
-  <text x="900" y="600" class="label">PNR listener image</text>
-  <text x="900" y="626" class="small muted">.NET + local Presidio · pnr.xml · model bundled, no download</text>
+  <text x="900" y="600" class="label">Seats listener image</text>
+  <text x="900" y="626" class="small muted">.NET + local Presidio · seats.xml · model bundled, no download</text>
   <text x="900" y="650" class="tiny muted">pythonnet · presidio-analyzer · presidio-anonymizer · en_core_web_lg</text>
   <text x="900" y="682" class="small muted">Ack after publish succeeds</text>
 

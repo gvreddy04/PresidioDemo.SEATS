@@ -1,71 +1,65 @@
-# PNR feed sample review and structure
+# Seats feed sample review and structure
 
-> **Superseded design.** This review describes the per-feed parsers, field policies and the three XML files (`feed-policies.xml`, `xdr-layouts.xml`, `reference-layouts.xml`) that decoded-text detection replaced. Those files and parsers are removed. Protection now uses the generic decoder and the PNR recognizer file; see [Decoded-text detection](../README.md#decoded-text-detection). The sample review, the structure findings and the field meanings below stay valid as analysis; the configuration notes refer to the removed design. The protection results they produced are frozen, value-free, in [tests/fixtures/parity-baseline.json](../tests/fixtures/parity-baseline.json).
+> **Superseded design.** This review describes the field policies and the inline JSON policy paths that decoded-text detection replaced. Those policies are removed. Protection now uses the shared JSON parser and the Seats recognizer file; see [Decoded-text detection](../README.md#decoded-text-detection). The sample review, the structure findings and the field meanings below stay valid as analysis; the policy notes refer to the removed design. The protection results they produced are frozen, value-free, in [tests/fixtures/parity-baseline.json](../tests/fixtures/parity-baseline.json).
 >
-> This branch (`PNR-Worker`) keeps the PNR feed only. The review of the other feeds, and the configuration examples of the removed design (which used one of those feeds), are in the repository history at commit `dffbdad`.
+> This repository is the Seats worker and keeps the Seats feed only. The review of the other feeds is in the repository history at commit `dffbdad`.
 
-Both files in `docs/sample-docs/PNR/` were reviewed without changing source bytes. Each is an MQ text export: `A` rows carry metadata and `X` rows carry hexadecimal payload bytes. Both are binary payloads, and neither is a negative test.
+All three files in `docs/sample-docs/Seats/` were reviewed without changing source bytes. Each is an MQ text export: `A` rows carry metadata and `X` rows carry hexadecimal payload bytes. All three payloads are UTF-8 JSON with an object root. `SEATS_02_Negative_Testing.txt` is a negative test.
 
-## Binary representation
+## JSON representation and the shared parser
 
-The examples use big-endian 32-bit words and counted ASCII strings padded to four bytes. A counted string consists of its byte length, that many text bytes and zero padding. An empty string is a length word of zero, with no value or padding. Missing text is therefore represented structurally, not by a special character. Actual `*` characters in populated fields are masked/placeholder content and are not universal missing-field markers.
+The Seats route selects `SeatsParser` in `src/PresidioDemo.Core/Decoder`, which sets the route and the required object root and inherits `JsonFeedParser`. The shared class uses `System.Text.Json.Utf8JsonReader` to record the exact byte span of every scalar and `JsonSerializer` to write a changed string; there are no separate JSON decoder, encoder, model or structure-definition files.
 
-The initial PNR word is two. The removed schema checked this observed discriminator. Subsequent words and string counts are parsed separately, and offsets are calculated while reading each message.
+Each scalar has an instance path (a JSON Pointer, such as `/OrderChangeNotif/Old/Customers/0/FirstName`) that locates it in one message, and a wildcard path with array positions as `*` (`/OrderChangeNotif/Old/Customers/*/FirstName`). JSON field names and nesting supply the structure. Array position never establishes passenger identity. Only string scalars are detection candidates; numbers, booleans and nulls are kept byte for byte.
 
-A scanner can read some pairs of raw words as a short counted string: for example `00000001 31000000` looks like a length-one string containing `1` with three zero pad bytes. The generic decoder therefore treats only strings of four or more printable characters as text and keeps shorter spans as raw words (WR-015).
+The parser keeps the original JSON bytes, scalar types and grouping, including empty arrays and objects, numeric spellings and whitespace. A protected output may differ only within changed string spans; MQ metadata, row framing, the newline style and all other payload bytes are validated before publication. Comparing the byte gaps between scalars also detects changes to property names and empty containers. Duplicate property names (also when written with escapes), a property named `*`, trailing data, truncated JSON, an array root and a JSON message without scalars are rejected. An MQ export must declare CCSID 1208 (UTF-8); no code-page conversion is guessed.
 
-## PNR
+## Seats
 
-PNR has two examples, PNR.txt (5,452 payload bytes) and PNR_02.txt (1,780). The XDR schema follows the sections of the P2 PNR Record Layout (keys 01, 10, 20, 30, 40, 43, 50, 60, 80, C0, D0, D2, D8). Repeating sections are rpcgen linked lists: a `1` word precedes each element and a `0` word ends the list. The spec describes the MQ/RTA P2 record and excludes the real-time C-structure feed, so it supplies field meanings, not wire order; element shapes are fitted to both samples, and lists that are empty in both samples rejected any content in the removed design. The reference layout mapped 53 strings, and the PNR policy had 92 fields.
+A Seats message is one `OrderChangeNotif` event: event metadata (`EventVersion`, `EventTime`, `EventName`, `EventType`), the order (`OrderId`, `OrderCreateDateTime`, the numeric `OrderVersion`), an `Old` and a `New` section that each list `Customers`, and `EventDetail` (the channel, the agent and the employee ID). A customer carries `PaxId`, `SeqInPNR`, the names (`FirstName`, `LastName`, `BookedAsName` in `SURNAME/GIVEN` form), the record locator `UARecloc` and its creation date, and `ServiceItems`. A seat service item carries its identifiers, timestamps, booking class, cabin and seat number, the seat attribute lists (`Attributes`, `IATAAttributes`, `TTYAttributes`), the occupancy status, the flight segment and leg references and times, the source and the action type.
 
-Mixed record texts (SSR/OSI facts, frequent-flyer accounts, remarks and fare references) use ordered variants keyed by record code, such as DOCS, CTCE, CTCM and TKNE. The first matching pattern masks the personal values while the record syntax stays unchanged; a catch-all masks unrecognized records whole. PNR.txt has 80 masked and 74 kept values; PNR_02.txt has 24 and 33.
+`SEATS.txt` (1,362 payload bytes) is a `PNRUpdate` event whose `Old` section holds one customer with one deleted seat and whose `New` section is empty. `SEATS_03.txt` (1,329 bytes) is a `SeatAssign` event with the customer in `New` and an empty `Old`, and its `EventDetail` adds `ChannelId` and `ChannelName`. `SEATS_02_Negative_Testing.txt` holds the same payload as `SEATS.txt`, exported with CCSID 437 instead of 1208, and is rejected before detection. `SEATS.txt` has 59 scalars (58 strings and one number), `SEATS_03.txt` 51 (50 and one).
 
-Some PNR records use `*` between adjacent fields. Shared loyalty, sensitive-attribute and financial-information rules use `#` for masking so separators remain distinguishable when the protected record is parsed again. Other masks use `*`. The output is validated and can be processed a second time without changes.
-
-The two PNR samples do not establish a general producer contract, all collection shapes, unknown word meanings or passenger associations, and neither the spec nor the samples carry a stable passenger ID. In the removed design, unsupported structures went to the dead-letter queue without publication until a reviewed schema represented them; decoded-text detection scans them instead (WR-016).
+The samples do not establish a general producer contract: they show one customer and one service item each, and neither a passenger with several seats nor a `MiddleName`. The two-passenger fixture `tests/unit-tests/fixtures/seats-mq-export.txt` (fictional values) covers two customers and both sections.
 
 ## Reviewed samples and results
 
-Counts below describe populated binary text/capture fields under the removed field policies. Fixed structural tags, empty text slots and raw framing words are excluded. Retained verification evidence records source hashes and calculated field spans without personal values.
+Counts below describe JSON scalar occurrences under the removed field policies, whose inline Seats policy listed 68 exact paths (both samples and `New`-section mirrors of reviewed `Old`-section rules). Retained verification evidence records source hashes and calculated field paths without personal values.
 
-| Sample | Payload bytes | Kept | Masked |
+| Sample | Payload bytes | Kept | Protected |
 | --- | ---: | ---: | ---: |
-| PNR.txt | 5,452 | 74 | 80 Mask |
-| PNR_02.txt | 1,780 | 33 | 24 Mask |
+| SEATS.txt | 1,362 | 30 | 29 Replace |
+| SEATS_03.txt | 1,329 | 32 | 19 Replace |
+| SEATS_02_Negative_Testing.txt | 1,362 | Rejected | MQ export without UTF-8 CCSID 1208 |
 
-With decoded-text detection, both samples are published through the real worker and local Presidio. Of the 104 values the former field policies protected, 97 are protected and 7 are approved exceptions (strings of one to three characters, WR-015). Both identified PNR occurrences stay unchanged, and source hashes, payload sizes, raw words, string counts, zero padding, record syntax, MQ headers, row framing and newline style are preserved.
+With decoded-text detection, `SEATS.txt` and `SEATS_03.txt` are published through the real worker and local Presidio, and `SEATS_02_Negative_Testing.txt` is dead-lettered with the same reason. All 48 values the former field policies protected (names, passenger and order IDs, the employee ID and the seat attribute codes) are protected by the recognizer keys of `seats.xml`, so there are no approved exceptions. Both PNR occurrences stay unchanged, under the allowed `UARecloc` key. `SEATS.txt` has 29 changed and 29 allowed strings, `SEATS_03.txt` 19 and 31; the extra kept occurrence of the removed design is the number `OrderVersion`, which is not a string. Source hashes, payload sizes, numbers, property names, grouping, MQ headers, row framing and newline style are preserved.
 
 ## Configuration behavior (removed design)
 
-The removed design kept three XML files with these responsibilities:
-
-| File | Responsibility |
-| --- | --- |
-| `reference-layouts.xml` | Readable field names, baseline offsets/lengths and optional capture mappings |
-| `xdr-layouts.xml` | Ordered binary words, counted strings, padding, arrays and optional groups |
-| `feed-policies.xml` | Per-feed Keep/Mask actions, with an optional shared catalog |
-
-The worker validated them together before it connected to the broker; a restart applied changes. Every exposed scalar needed exactly one policy, unknown structure went to the dead-letter queue without publication, and new structural variations required reviewed XML. Decoded-text detection replaced all three files with `pnr.xml`.
+The removed design kept the Seats policy inline in `feed-policies.xml`, with one exact JSON path per scalar and a Keep or Replace action; every populated scalar needed a configured rule, and an unknown path rejected the complete message. The recognizer file that replaced it, `seats.xml`, decides by property name instead: recognizer keys for the personal-data properties, allow-list keys for the operational ones, and Presidio for any string under a property it does not name.
 
 ## Reviewed field names
 
-PNR names follow the P2 record layout sections and replace the earlier fixed-offset aliases.
+JSON property paths are unchanged from the producer.
 
-| Original field | Policy alias | Evidence and limits |
+| Property | Entity in `seats.xml` | Evidence and limits |
 | --- | --- | --- |
-| `/names/*/surname`, `/firstNames/*/givenName` | `surname`, `givenName` | P2 key 20 `P20PSNM` and key 30 `P20PNAM`; one linked-list item per name, never a passenger identity |
-| `/facts/*/text` | `factText` | P2 key 40 `P20PFTX` SSR/OSI text; ordered variants for DOCS, CTCE, CTCM and other record codes |
-| `/frequentFlyers/*/account` | `frequentFlyerAccount` | P2 key 43 `P20PFQT`/`P20ESTX` FQTV number and tier text |
-| `/remarks/*/text`, `/fareReferences/*/text`, `/etktPayments/*/passengerName` | `remarkText`, `fareReferenceText`, `etktPassengerName` | Remark, fare-reference and electronic-ticket payment records inside the PNR; variants mask personal captures and keep record syntax |
+| `FirstName`, `LastName`, `MiddleName`, `BookedAsName` | `PERSON` (`passengerName`) | Names of one customer; `BookedAsName` is `SURNAME/GIVEN`, which the name pattern also finds under any other property |
+| `PaxId` | `PASSENGER_ID` | Passenger identifier within the order; not a stable identity across orders |
+| `OrderId` | `ORDER_ID` | The order the event belongs to |
+| `EmpId` | `EMPLOYEE_ID` | The employee or service account that made the change |
+| `Attributes`, `IATAAttributes`, `TTYAttributes` | `SENSITIVE_ATTRIBUTE` | Seat and passenger attribute codes, some of which describe health, age or custody; every value of the array |
+| `UARecloc` | allowed | The record locator (PNR), published unchanged; `pnr` is allowed for the same reason |
 
 ## Reproduce verification
 
 ```powershell
 dotnet build PresidioDemo.slnx
+dotnet run --project tests/GenericCodecChecks
 dotnet run --project tests/FeedPipelineChecks
 dotnet run --project tests/WorkerChecks
 src/.venv/Scripts/python.exe -m unittest discover -s tests/unit-tests -p test_*.py -v
 src/.venv/Scripts/python.exe tests/run_sample_verification.py
 ```
 
-The sample verification runs both PNR samples through `tests/FeedPipelineHarness`. It keeps the outputs, transaction logs and a value-free `verification.json` in a fresh `.test-runs/e2e-*` folder. The harness exits with code 0 because both samples are published.
+The sample verification runs all three Seats samples through `tests/FeedPipelineHarness`. It keeps the outputs, the dead letter, transaction logs and a value-free `verification.json` in a fresh `.test-runs/e2e-*` folder. The harness exits with code 2 because `SEATS_02_Negative_Testing.txt` is rejected by design; the verification passes when exactly that sample is rejected with its reason.

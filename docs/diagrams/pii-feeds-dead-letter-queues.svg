@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1880 754" role="img" aria-labelledby="title desc">
-<title id="title">PNR feed with its dead letter queue</title>
-<desc id="desc">The DemoAir reservation host sends the PNR feed through Solace micro-integrations to the integration Solace broker. The PNR input queue sits in the restricted PII box with its own PNR dead letter queue on the same broker. The PII service AWS account runs one ECS worker for the PNR feed with Presidio in-process and publishes masked messages to the PNR PII clean queue, which the partner core system consumes.</desc>
+<title id="title">Seats feed with its dead letter queue</title>
+<desc id="desc">The DemoAir Seats operations app publishes the Seats feed, as JSON, to the integration Solace broker. The Seats input queue sits in the restricted PII box with its own Seats dead letter queue on the same broker. The PII service AWS account runs one ECS worker for the Seats feed with Presidio in-process and publishes masked messages to the Seats PII clean queue, which the partner core system consumes.</desc>
 <defs>
 <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#444441"/></marker>
 <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#A32D2D"/></marker>
@@ -21,19 +21,15 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 </style>
 </defs>
 <rect width="1880" height="754" fill="#FFFFFF"/>
-<text class="h" x="30" y="30" style="font-size:20px">PNR feed with its dead letter queue</text>
+<text class="h" x="30" y="30" style="font-size:20px">Seats feed with its dead letter queue</text>
 
 <rect x="30" y="90" width="390" height="340" rx="12" fill="#EEEDFE" stroke="#534AB7" stroke-width="1.5"/>
-<text class="h" x="46" y="116">DemoAir reservations host</text>
-<rect x="50" y="130" width="220" height="200" rx="8" fill="#F7F6FE" stroke="#7F77DD"/>
-<text class="t" x="64" y="152">Mainframe</text>
-<g class="ap"><rect x="70" y="164" width="180" height="44" rx="6"/><text class="s" x="160" y="191" text-anchor="middle">Reservation system</text></g>
-<g class="ap"><rect x="70" y="262" width="180" height="44" rx="6"/><text class="s" x="160" y="289" text-anchor="middle">Host comms</text></g>
-<g class="ap"><rect x="70" y="356" width="180" height="44" rx="6"/><text class="s" x="160" y="383" text-anchor="middle">IBM MQ</text></g>
-<g class="ap"><rect x="290" y="346" width="120" height="64" rx="6"/><text class="s" x="350" y="373" text-anchor="middle">Solace micro-</text><text class="s" x="350" y="391" text-anchor="middle">integrations</text></g>
-<path class="ln" d="M160 210V260" marker-start="url(#a)" marker-end="url(#a)"/>
-<path class="ln" d="M160 306V354" marker-end="url(#a)"/>
-<path class="ln" d="M250 378H288" marker-end="url(#a)"/>
+<text class="h" x="46" y="116">DemoAir operations apps</text>
+<rect x="50" y="130" width="360" height="280" rx="8" fill="#F7F6FE" stroke="#7F77DD"/>
+<text class="t" x="64" y="152">Seats</text>
+<g class="ap"><rect x="230" y="356" width="180" height="44" rx="6"/><text class="s" x="320" y="383" text-anchor="middle">Seats app</text></g>
+<text class="m" x="64" y="378">JSON messages,</text>
+<text class="m" x="64" y="396">UTF-8 (CCSID 1208)</text>
 
 <rect x="460" y="40" width="1030" height="504" rx="14" fill="#FFFBF0" stroke="#EF9F27" stroke-width="2"/>
 <text class="h" x="476" y="64">DemoAir integration services (AWS)</text>
@@ -42,13 +38,13 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 
 <rect x="500" y="130" width="380" height="160" rx="12" fill="#FDF3F3" stroke="#A32D2D" stroke-width="1.5" stroke-dasharray="8 5"/>
 <text class="h" x="516" y="156" style="fill:#A32D2D">PII · raw data, restricted</text>
-<g class="iq"><rect x="520" y="180" width="170" height="40" rx="6"/><use href="#q" x="530" y="193" width="20" height="14"/><text class="s" x="558" y="205">PNR (PCI clean)</text></g>
-<g class="dq"><rect x="710" y="228" width="150" height="40" rx="6"/><use href="#q" x="720" y="241" width="20" height="14"/><text class="s" x="748" y="253">PNR DLQ</text></g>
+<g class="iq"><rect x="520" y="180" width="170" height="40" rx="6"/><use href="#q" x="530" y="193" width="20" height="14"/><text class="s" x="558" y="205">Seats (PCI clean)</text></g>
+<g class="dq"><rect x="710" y="228" width="150" height="40" rx="6"/><use href="#q" x="720" y="241" width="20" height="14"/><text class="s" x="748" y="253">Seats DLQ</text></g>
 <path class="dl" d="M605 220V248H708" marker-end="url(#r)"/>
 
 <rect x="1200" y="130" width="250" height="160" rx="12" fill="#EEF6E8" stroke="#3B6D11" stroke-width="1.5"/>
 <text class="h" x="1216" y="156" style="fill:#3B6D11">PII clean</text>
-<g class="cq"><rect x="1220" y="180" width="210" height="40" rx="6"/><use href="#q" x="1230" y="193" width="20" height="14"/><text class="s" x="1258" y="205">PNR (PII &amp; PCI clean)</text></g>
+<g class="cq"><rect x="1220" y="180" width="210" height="40" rx="6"/><use href="#q" x="1230" y="193" width="20" height="14"/><text class="s" x="1258" y="205">Seats (PII &amp; PCI clean)</text></g>
 
 <path class="ln" d="M410 378H440V200H518" marker-end="url(#a)"/>
 <path class="ln" d="M690 200H940V378" marker-end="url(#a)"/>
@@ -58,8 +54,8 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 
 <rect x="480" y="340" width="990" height="184" rx="12" fill="#FAEEDA" stroke="#BA7517" stroke-width="1.5"/>
 <text class="h" x="496" y="366">PII service AWS account · ECS Fargate</text>
-<g class="wk"><rect x="890" y="380" width="320" height="56" rx="6"/><text class="t" x="1050" y="402" text-anchor="middle">PNR worker</text><text class="m" x="1050" y="422" text-anchor="middle">.NET + Presidio · binary XDR</text></g>
-<text class="s" x="509" y="470">One task for the PNR feed: reads the PNR PII queue, masks, publishes to the PNR clean queue, then acks.</text>
+<g class="wk"><rect x="890" y="380" width="320" height="56" rx="6"/><text class="t" x="1050" y="402" text-anchor="middle">Seats worker</text><text class="m" x="1050" y="422" text-anchor="middle">.NET + Presidio · JSON parser</text></g>
+<text class="s" x="509" y="470">One task for the Seats feed: reads the Seats PII queue, masks, publishes to the Seats clean queue, then acks.</text>
 <text class="s" x="509" y="494">Presidio runs inside the worker through Python.NET. No HTTP calls.</text>
 
 <rect x="1530" y="80" width="320" height="230" rx="12" fill="#EEF6E8" stroke="#3B6D11" stroke-width="1.5"/>
@@ -73,8 +69,8 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <text class="s" x="48" y="628">It holds unmasked passenger data, so it gets the</text>
 <text class="s" x="48" y="648">same access limits as the input queue.</text>
 <rect x="490" y="574" width="440" height="112" rx="10" fill="#FCEBEB" stroke="#A32D2D"/>
-<text class="t" x="508" y="602">PNR DLQ on the same broker</text>
-<text class="s" x="508" y="628">The DLQ sits beside the PNR input queue. If the</text>
+<text class="t" x="508" y="602">Seats DLQ on the same broker</text>
+<text class="s" x="508" y="628">The DLQ sits beside the Seats input queue. If the</text>
 <text class="s" x="508" y="648">queue moves to another broker, its DLQ moves with it.</text>
 <rect x="950" y="574" width="440" height="112" rx="10" fill="#FAEEDA" stroke="#BA7517"/>
 <text class="t" x="968" y="602">Ack only after the clean publish</text>
@@ -84,7 +80,7 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <rect x="1410" y="574" width="440" height="112" rx="10" fill="#F1EFE8" stroke="#888780"/>
 <text class="t" x="1428" y="602">Watch and replay</text>
 <text class="s" x="1428" y="628">Alert on DLQ depth. After a fix, move the messages</text>
-<text class="s" x="1428" y="648">back to the PNR input queue.</text>
+<text class="s" x="1428" y="648">back to the Seats input queue.</text>
 
 <path class="ln" d="M30 724H80" marker-end="url(#a)"/>
 <text class="s" x="90" y="729">Message flow</text>

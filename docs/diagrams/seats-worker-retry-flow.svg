@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
-<title id="title">PNR masking with retry and dead letter queue</title>
-<desc id="desc">The PNR worker in the DemoAir PII service AWS account reads one message from the PNR input queue, masks it with Presidio in the same process, publishes the masked message and acknowledges the input only after the broker confirms. Bad data goes to the PNR dead letter queue at once. A broker outage is retried every 5 seconds without acknowledging. A crash before the ack makes the broker redeliver. After 5 deliveries the worker moves the message to the DLQ, and the broker does so after 10 as a backstop.</desc>
+<title id="title">Seats masking with retry and dead letter queue</title>
+<desc id="desc">The Seats worker in the DemoAir PII service AWS account reads one message from the Seats input queue, masks it with Presidio in the same process, publishes the masked message and acknowledges the input only after the broker confirms. Bad data goes to the Seats dead letter queue at once. A broker outage is retried every 5 seconds without acknowledging. A crash before the ack makes the broker redeliver. After 5 deliveries the worker moves the message to the DLQ, and the broker does so after 10 as a backstop.</desc>
 <defs>
 <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#444441"/></marker>
 <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#A32D2D"/></marker>
@@ -26,7 +26,7 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 </style>
 </defs>
 <rect width="1600" height="900" fill="#FFFFFF"/>
-<text class="h" x="30" y="40" style="font-size:20px">PNR masking with retry and dead letter queue</text>
+<text class="h" x="30" y="40" style="font-size:20px">Seats masking with retry and dead letter queue</text>
 <text class="m" x="30" y="62">Ack only after the masked message is published. Bad data goes to the DLQ at once; only failures that can recover are retried.</text>
 
 <!-- Message broker -->
@@ -36,15 +36,15 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 
 <g class="iq"><rect x="50" y="145" width="260" height="130" rx="8"/>
 <use href="#q" x="64" y="160" width="20" height="14"/>
-<text class="t" x="92" y="172">PNR (PCI clean)</text>
+<text class="t" x="92" y="172">Seats (PCI clean)</text>
 <text class="m" x="64" y="194">Input queue · raw PII</text>
-<text class="d" x="64" y="218">PNR K7QX2M</text>
+<text class="d" x="64" y="218">Seats · PNR K7QX2M</text>
 <text class="d" x="64" y="238">Emily Carter</text>
 <text class="d" x="64" y="258">emily.carter@example.com</text></g>
 
 <g class="dq"><rect x="50" y="570" width="260" height="130" rx="8"/>
 <use href="#q" x="64" y="585" width="20" height="14"/>
-<text class="t" x="92" y="597">PNR dead letter queue</text>
+<text class="t" x="92" y="597">Seats dead letter queue</text>
 <text class="m" x="64" y="620">Raw PII, same access as input</text>
 <text class="m" x="64" y="642">Reject reason on each message</text>
 <text class="m" x="64" y="664">Alert on depth</text>
@@ -59,9 +59,9 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <rect x="370" y="80" width="880" height="400" rx="12" fill="#FFF8EC" stroke="#EF9F27" stroke-width="1.5"/>
 <text class="h" x="390" y="106">DemoAir PII service AWS account</text>
 <rect x="395" y="120" width="830" height="340" rx="10" fill="#FFFDF8" stroke="#BA7517"/>
-<text class="t" x="412" y="142">ECS Fargate · PNR service</text>
+<text class="t" x="412" y="142">ECS Fargate · Seats service</text>
 <rect x="420" y="158" width="780" height="290" rx="8" fill="#FFFFFF" stroke="#854F0B" stroke-width="1.5"/>
-<text class="t" x="436" y="184">PNR worker task (.NET) · no HTTP calls</text>
+<text class="t" x="436" y="184">Seats worker task (.NET) · no HTTP calls</text>
 <text class="m" x="436" y="206">PresidioDemo.Worker · PresidioDemo.Core · Presidio via Python.NET</text>
 
 <g class="st"><rect x="430" y="230" width="175" height="80" rx="6"/>
@@ -119,13 +119,13 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <!-- Output side -->
 <g class="cq"><rect x="1290" y="145" width="280" height="130" rx="8"/>
 <use href="#q" x="1304" y="160" width="20" height="14"/>
-<text class="t" x="1332" y="172">PNR (PII &amp; PCI clean)</text>
+<text class="t" x="1332" y="172">Seats (PII &amp; PCI clean)</text>
 <text class="m" x="1304" y="194">Output queue</text>
 <text class="d" x="1304" y="218">PNR K7QX2M unchanged</text>
 <text class="d" x="1304" y="238">Name and email masked</text></g>
 <g class="st"><rect x="1290" y="320" width="280" height="70" rx="8" style="stroke:#534AB7"/>
 <text class="t" x="1430" y="350" text-anchor="middle">Partner core system</text>
-<text class="m" x="1430" y="372" text-anchor="middle">Consumes the masked PNR</text></g>
+<text class="m" x="1430" y="372" text-anchor="middle">Consumes the masked Seats</text></g>
 <path class="ln" d="M1430 277V318" marker-end="url(#a)"/>
 
 <!-- Legend -->
