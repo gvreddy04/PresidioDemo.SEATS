@@ -84,8 +84,11 @@ public static class RecognizerFileChecks
                 && bare.ActionFor("PERSON") is ({ Operator: AnonymizerOperator.Replace }, false), "an empty file loads with Presidio's defaults and replace", ref passed);
             Check(Load(scratch, "<recognizers feed=\"Seats\"><allow_list><item>FQTR</item></allow_list></recognizers>").AllowList is { Regex: false } exact
                 && exact.MatchesWhole("FQTR") && !exact.MatchesWhole("fqtr"), "an exact allow list compares the whole text exactly", ref passed);
-            Check(file.ToBridgeJson().Contains("\"disabled\":[\"CryptoRecognizer\"]", StringComparison.Ordinal)
-                && file.ToBridgeJson().Contains("\"denyList\":[\"MR\",\"MRS\",\"DR\"]", StringComparison.Ordinal), "the bridge JSON carries switches and deny lists", ref passed);
+            Check(file.ToBridgeJson(false).Contains("\"disabled\":[\"CryptoRecognizer\"]", StringComparison.Ordinal)
+                && file.ToBridgeJson(false).Contains("\"denyList\":[\"MR\",\"MRS\",\"DR\"]", StringComparison.Ordinal), "the bridge JSON carries switches and deny lists", ref passed);
+            Check(file.ToBridgeJson(false).Contains("\"defaultDetection\":false", StringComparison.Ordinal)
+                && file.ToBridgeJson(true).Contains("\"defaultDetection\":true", StringComparison.Ordinal),
+                "the bridge JSON carries Presidio:DefaultDetection, so the registry is built with or without the predefined recognizers", ref passed);
             // JSON keys: a mapped key makes its whole value the entity, the innermost mapped name on the path wins, and names
             // compare ignoring case; a skipped key anywhere on the path publishes the value without analysis.
             Check(file.MappedEntity(["Customers", "firstname"]) == "PERSON" && file.MappedEntity(["Customers", "LastName"]) is null
@@ -94,7 +97,7 @@ public static class RecognizerFileChecks
             Check(file.Skips(["uarecloc"]) && file.Skips(["FlightLegRefId", "Code"]) && !file.Skips(["Customers", "PaxStatus"]),
                 "keys_to_skip skips a value under a listed name anywhere on its key path, ignoring case", ref passed);
             Check(file.Declares("dob") && file.Declares("UARecloc") && !file.Declares("Customers"), "mapped and skipped names are declared; others are not", ref passed);
-            Check(!file.ToBridgeJson().Contains("FirstName", StringComparison.Ordinal) && !file.ToBridgeJson().Contains("UARecloc", StringComparison.Ordinal),
+            Check(!file.ToBridgeJson(true).Contains("FirstName", StringComparison.Ordinal) && !file.ToBridgeJson(true).Contains("UARecloc", StringComparison.Ordinal),
                 "key mappings and skipped keys stay in .NET; the bridge JSON does not carry them", ref passed);
 
             Reject(scratch, "<recognizers feed=\"Seats\"", "not well-formed XML", ref passed);

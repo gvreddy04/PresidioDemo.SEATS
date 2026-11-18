@@ -1,7 +1,8 @@
-"""Value-free verification of decoded-text protection against the frozen parity baseline (WR-019).
+"""Value-free verification of decoded-text protection against the frozen parity baseline (WR-019), names only.
 
-Shared by test_decoded_text_feeds.py and tests/run_sample_verification.py. Nothing here prints or returns a sample
-value; failures name the sample, location and check only.
+Shared by test_decoded_text_feeds.py and tests/run_sample_verification.py. The recognizer file defines passenger names
+only, so only the baseline's PERSON values are checked; every other baseline value is counted as out of scope and never
+fails a check. Nothing here prints or returns a sample value; failures name the sample, location and check only.
 """
 from pathlib import Path
 import json
@@ -13,6 +14,8 @@ FIXTURES = PROJECT / "tests" / "fixtures"
 EXPECTED_REJECTIONS = {
     "SEATS_02_Negative_Testing.txt": "UTF-8 CCSID 1208",
 }
+# The one baseline entity in scope: the recognizer file defines passenger names only.
+SCOPE_ENTITY = "PERSON"
 # A JSON string literal, with its escapes, as it appears in the payload bytes.
 STRING_TOKEN = re.compile(rb'"(?:[^"\\]|\\.)*"')
 
@@ -28,6 +31,11 @@ def payload(message):
 def header(message):
     """Return the MQ metadata rows of an export."""
     return [line for line in message.decode("utf-8").splitlines() if line.startswith("A ")]
+
+
+def in_scope(document):
+    """Return the baseline values in the names-only scope."""
+    return [entry for entry in document["protected"] if entry["entity"] == SCOPE_ENTITY]
 
 
 def baseline():
@@ -59,11 +67,12 @@ def tokens(data):
 
 
 def verify_published(feed, name, original, output, document=None, exceptions=None):
-    """Check one published sample; return value-free counts, raise AssertionError on a failed check."""
+    """Check one published sample; return value-free counts, raise AssertionError on a failed check. Baseline values
+    outside the names-only scope are counted as out_of_scope and not checked."""
     if document is None:
         document, exceptions = baseline()
     before, after = payload(original), payload(output)
-    checks = {"protected": 0, "approved_exceptions": 0}
+    checks = {"protected": 0, "approved_exceptions": 0, "out_of_scope": 0}
     if original[:2] == b"A ":
         if header(original) != header(output):
             raise AssertionError(f"{name}: MQ metadata changed")
@@ -89,6 +98,9 @@ def verify_published(feed, name, original, output, document=None, exceptions=Non
     left_json, right_json = json.loads(before), json.loads(after)
     for entry in document["protected"]:
         if entry["sample"] != name:
+            continue
+        if entry["entity"] != SCOPE_ENTITY:
+            checks["out_of_scope"] += 1
             continue
         old, new = json_value(left_json, entry["location"]), json_value(right_json, entry["location"])
         # Only characters that were not already * need to change; a value that is all * was masked before it arrived.

@@ -1,8 +1,12 @@
 {
   "parity": "PASS",
+  "defaultDetection": false,
+  "scope": "names-only (PERSON)",
   "protected": {
     "baseline": 48,
-    "caught": 48,
+    "inScope": 6,
+    "outOfScope": 42,
+    "caught": 6,
     "missed": 0,
     "approvedExceptions": 0,
     "unapproved": 0
@@ -22,12 +26,12 @@
   "throughput": {
     "rounds": 20,
     "messages": 40,
-    "nlpNer": "on (spaCy en_core_web_lg)",
-    "messagesPerSecondPerTask": 1184.4,
+    "nlpNer": "off (Presidio:DefaultDetection false; no custom recognizer has context words, so spaCy does not run)",
+    "messagesPerSecondPerTask": 606.7,
     "feeds": [
       {
         "feed": "Seats",
-        "messagesPerSecondPerTask": 1210.1,
+        "messagesPerSecondPerTask": 613.6,
         "tasks": 1
       }
     ],

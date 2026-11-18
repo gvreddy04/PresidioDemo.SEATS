@@ -14,6 +14,7 @@ string baseDirectory = AppContext.BaseDirectory;
 IHost host;
 string environment;
 bool valuesSwitchedOff;
+bool defaultDetection;
 try
 {
     (var configuration, environment) = EnvironmentConfiguration.Build(Path.Combine(baseDirectory, "appsettings.json"));
@@ -22,7 +23,8 @@ try
     var presidio = PresidioOptions.Load(configuration, baseDirectory);
     // Outside Local, Dev and QA the values flag is switched off instead of stopping the worker (QF-26111601).
     valuesSwitchedOff = presidio.ApplyValuesEnvironment(environment);
-    var pipeline = FeedPipelineConfiguration.Load(presidio.RecognizerDirectory);
+    defaultDetection = presidio.DefaultDetection;
+    var pipeline = FeedPipelineConfiguration.Load(presidio.RecognizerDirectory, defaultDetection);
 
     var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
     {
@@ -61,7 +63,7 @@ catch (Exception ex) when (ex is InvalidOperationException or InvalidDataExcepti
 
 using (host)
 {
-    Console.WriteLine($"PRESIDIO FEED WORKER | environment {environment} | Ctrl+C or SIGTERM stops after the current messages.");
+    Console.WriteLine($"PRESIDIO FEED WORKER | environment {environment} | default detection {(defaultDetection ? "on" : "off")} | Ctrl+C or SIGTERM stops after the current messages.");
     if (valuesSwitchedOff)
     {
         Console.WriteLine($"WARNING Presidio:DetectionLogValues is ignored in the {environment} environment (allowed only in Local, Dev and QA); detection blocks stay value-free.");

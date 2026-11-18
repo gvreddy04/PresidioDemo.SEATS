@@ -65,12 +65,13 @@ public sealed record AllowList(bool Regex, IReadOnlyList<string> Items, IReadOnl
 /// <param name="Feed">The feed route.</param>
 /// <param name="Language">The analysis language; only <c>en</c>.</param>
 /// <param name="Threshold">The minimum score for a detection to be acted on.</param>
-/// <param name="Disabled">The names of Presidio predefined recognizers switched off.</param>
+/// <param name="Disabled">The names of Presidio predefined recognizers switched off; they matter only with
+/// <c>Presidio:DefaultDetection</c> on, but their names are checked either way.</param>
 /// <param name="Recognizers">The custom recognizers.</param>
 /// <param name="AllowList">The whole-string allow list.</param>
 /// <param name="Anonymizers">The actions by entity, including <c>DEFAULT</c> when configured.</param>
-/// <param name="Enabled">The names of Presidio predefined recognizers the file lists as enabled; they run anyway, but their names
-/// are checked so a typo stops startup.</param>
+/// <param name="Enabled">The names of Presidio predefined recognizers the file lists as enabled; they run with
+/// <c>Presidio:DefaultDetection</c> on whether listed or not, but their names are checked so a typo stops startup.</param>
 /// <param name="EntityMapping">JSON property names whose whole value is an entity, by name (ignoring case), as Presidio's
 /// structured analysis maps a key to an entity; null for none.</param>
 /// <param name="KeysToSkip">JSON property names whose values are published unchanged without analysis, as Presidio's
@@ -84,7 +85,7 @@ public sealed record RecognizerFile(FeedType Feed, string Language, double Thres
 
     /// <summary>
     /// Returns the entity mapped to a JSON value's key path: that of the innermost property name with a mapping, so a value
-    /// nested under a mapped name (every string under <c>transitionLinkSegments</c>) is that entity too.
+    /// nested under a mapped name (every string inside a mapped <c>Names</c> object) is that entity too.
     /// </summary>
     /// <param name="names">The property names of the value's key path, outermost first.</param>
     /// <returns>The entity, or null when no name on the path is mapped.</returns>
@@ -129,11 +130,15 @@ public sealed record RecognizerFile(FeedType Feed, string Language, double Thres
     /// <summary>
     /// Returns the JSON document the Python bridge uses to build this feed's Presidio registry.
     /// </summary>
-    /// <returns>Language, switched-off predefined recognizers and custom recognizers; .NET applies the threshold and actions.</returns>
-    public string ToBridgeJson() => JsonSerializer.Serialize(new
+    /// <param name="defaultDetection">The <c>Presidio:DefaultDetection</c> setting: true runs Presidio's predefined
+    /// recognizers beside the custom ones, false runs the custom ones only.</param>
+    /// <returns>Language, the default-detection switch, switched-off predefined recognizers and custom recognizers; .NET
+    /// applies the threshold and actions.</returns>
+    public string ToBridgeJson(bool defaultDetection) => JsonSerializer.Serialize(new
     {
         feed = FeedCatalog.Get(Feed).FolderName,
         language = Language,
+        defaultDetection,
         disabled = Disabled,
         enabled = Enabled ?? [],
         recognizers = Recognizers.Select(r => new

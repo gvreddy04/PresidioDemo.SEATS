@@ -39,12 +39,19 @@ public sealed record ParityBaselineDocument(string Source, IReadOnlyList<string>
 
 /// <summary>
 /// The WR-019 parity baseline fixture. It was frozen from the reviewed field policies before they were removed
-/// (work item 2026110501, T-002) and cannot be regenerated; a recognizer change must keep parity with it.
+/// (work item 2026110501, T-002) and cannot be regenerated; a recognizer change must keep parity with it. The recognizer
+/// files cover passenger names only, so parity is checked for the <see cref="ScopeEntity"/> values; every other baseline
+/// value is reported as out of scope and never fails a run.
 /// </summary>
 public static class ParityBaseline
 {
 
     #region Fields and Constants
+
+    /// <summary>
+    /// The one baseline entity in scope: the recognizer files define passenger names only.
+    /// </summary>
+    public const string ScopeEntity = "PERSON";
 
     /// <summary>
     /// The JSON options used for the fixtures: indented, camel case.
@@ -59,6 +66,13 @@ public static class ParityBaseline
     #endregion
 
     #region Methods
+
+    /// <summary>
+    /// Returns whether a baseline value is in the names-only scope of the parity checks.
+    /// </summary>
+    /// <param name="entry">The baseline value.</param>
+    /// <returns>True for a <see cref="ScopeEntity"/> value.</returns>
+    public static bool InScope(ParityEntry entry) => entry.Entity == ScopeEntity;
 
     /// <summary>
     /// Loads the frozen baseline.

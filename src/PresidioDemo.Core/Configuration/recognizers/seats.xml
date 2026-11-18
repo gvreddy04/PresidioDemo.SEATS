@@ -3,6 +3,16 @@
   Seats recognizers in the Presidio-style format (WR-014): a flat list under <recognizers> that mirrors Presidio's
   recognizer registry YAML, its analyze allow_list and its anonymizers map, using Presidio's names. The payload is JSON:
   every JSON string is a candidate and is decided on its own; numbers, booleans and nulls never change.
+  Scope: passenger names only (PERSON). This file defines the passengerName recognizer and the name keys; every other
+  value, such as a passenger, order or employee ID or a seat attribute, is not defined here.
+  Presidio:DefaultDetection (appsettings.json, false by default) decides what else acts:
+    false  only what this file defines acts: its custom recognizers and its <entity_mapping> keys. Presidio's predefined
+           recognizers (email, phone, credit card, IP address, IBAN, spaCy PERSON, NRP, LOCATION, DATE_TIME and the rest)
+           do not run. Example: {"FirstName":"JORDAN","Note":"mail jordan.miller@example.com"} publishes as
+           {"FirstName":"******","Note":"mail jordan.miller@example.com"}.
+    true   Presidio's predefined recognizers run as well, less any switched off below, and their spans get their
+           entity's <anonymizer>, else DEFAULT, else Presidio's replace. The same example publishes the e-mail address
+           masked too: "mail *************************".
   Order per string: a string under an <entity_mapping> key is that entity across its whole width; a string under a
   <keys_to_skip> key, or that matches an <allow_list> item end to end, is published unchanged; otherwise Presidio
   analyzes it with the property names of its key path as context words, and every span detected at or above
@@ -12,8 +22,10 @@
 -->
 <recognizers feed="Seats" language="en" default_score_threshold="0.5">
 
-  <!-- ===== Predefined recognizers (Presidio's own). All of them run unless switched off by class name, for example:
-       <recognizer name="CryptoRecognizer" type="predefined" enabled="false" />  ===== -->
+  <!-- ===== Predefined recognizers (Presidio's own). With Presidio:DefaultDetection true all of them run unless switched
+       off by class name, for example:
+       <recognizer name="CryptoRecognizer" type="predefined" enabled="false" />
+       With it false none of them runs, but a name listed here is still checked, so a typo stops startup. ===== -->
 
   <!-- ===== Custom pattern recognizers (Presidio type: custom), for strings under no mapped or skipped key. ===== -->
 
@@ -23,24 +35,14 @@
   </recognizer>
 
   <!-- ===== Entity mapping (Presidio structured analysis): the whole value under a key is the entity. ===== -->
-  <!-- A number or boolean under a mapped key cannot be protected in its JSON type, so the message is dead-lettered
-       (WR-016). Examples: "LastName": "MILLER" -> "******"; "BookedAsName": "MILLER/JORDAN" -> "*************";
-       "PaxId": 1001 dead-letters the message. -->
+  <!-- Passenger names only. A number or boolean under a mapped key cannot be protected in its JSON type, so the message
+       is dead-lettered (WR-016). Examples: "LastName": "MILLER" -> "******"; "BookedAsName": "MILLER/JORDAN" ->
+       "*************"; "FirstName": 1001 dead-letters the message. -->
   <entity_mapping>
     <key name="FirstName" entity="PERSON" />
     <key name="LastName" entity="PERSON" />
     <key name="MiddleName" entity="PERSON" />
     <key name="BookedAsName" entity="PERSON" />
-    <!-- Example: "PaxId": "K7QX2M00001" -> "***********". -->
-    <key name="PaxId" entity="PASSENGER_ID" />
-    <!-- Example: "OrderId": "DA012K7QX2M00" -> "*************". -->
-    <key name="OrderId" entity="ORDER_ID" />
-    <!-- Example: "EmpId": "svc-demo-01" -> "***********". -->
-    <key name="EmpId" entity="EMPLOYEE_ID" />
-    <!-- Example: "Attributes": ["WINDOW", "PETINCABIN"] -> ["******", "**********"]; also the IATA and TTY attribute codes. -->
-    <key name="Attributes" entity="SENSITIVE_ATTRIBUTE" />
-    <key name="IATAAttributes" entity="SENSITIVE_ATTRIBUTE" />
-    <key name="TTYAttributes" entity="SENSITIVE_ATTRIBUTE" />
   </entity_mapping>
 
   <!-- ===== Keys to skip (Presidio analyze_dict keys_to_skip): published unchanged without analysis. ===== -->
@@ -82,6 +84,9 @@
     <key name="UAReclocCreateDate" />
   </keys_to_skip>
 
+  <!-- Skipped keys and the allow list matter most with Presidio:DefaultDetection true, when Presidio's predefined
+       recognizers would otherwise read these values. -->
+
   <!-- ===== Allow list: a decoded string that matches an item end to end is published unchanged. ===== -->
   <!-- Examples: 2026-11-09, 2026-11-09T14:05:33.120Z, 2026-11-09T02:05:33.120 PM, under any key. -->
   <allow_list match="regex">
@@ -91,10 +96,7 @@
   <!-- ===== Anonymizers (Presidio anonymizers map): one action per entity. ===== -->
   <!-- Allowed types: mask, replace, redact, hash, keep; every result is fitted to the width it replaces (WR-015). -->
   <anonymizer entity="PERSON" type="mask" masking_char="*" />
-  <anonymizer entity="PASSENGER_ID" type="mask" masking_char="*" />
-  <anonymizer entity="ORDER_ID" type="mask" masking_char="*" />
-  <anonymizer entity="EMPLOYEE_ID" type="mask" masking_char="*" />
-  <anonymizer entity="SENSITIVE_ATTRIBUTE" type="mask" masking_char="*" />
+  <!-- Entities of Presidio's predefined recognizers, produced only with Presidio:DefaultDetection true. -->
   <anonymizer entity="EMAIL_ADDRESS" type="mask" masking_char="*" />
   <anonymizer entity="IP_ADDRESS" type="mask" masking_char="*" />
   <anonymizer entity="CREDIT_CARD" type="mask" masking_char="*" />

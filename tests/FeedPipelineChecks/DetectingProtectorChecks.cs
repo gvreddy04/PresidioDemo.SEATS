@@ -9,7 +9,8 @@ using PresidioDemo.Core.Protection;
 /// Checks the decoded-text protector (WR-014, WR-015) on the JSON feed: every JSON string is a candidate located by its key
 /// path, mapped and skipped keys decide by property name, detected spans get their entity's action fitted to
 /// width, a string in which nothing is detected is published unchanged and listed for review, numbers, booleans and nulls
-/// never change, detection failures dead-letter, and every production sample rebuilds and validates.
+/// never change, detection failures dead-letter, and every production sample rebuilds and validates. Runs with the shipped
+/// <c>Presidio:DefaultDetection</c> (off); the checks that need Presidio's predefined recognizers turn it on.
 /// </summary>
 internal static class DetectingProtectorChecks
 {
@@ -27,7 +28,8 @@ internal static class DetectingProtectorChecks
         var files = RecognizerFileReader.ReadAll(recognizers);
         string samples = Path.Combine(projectRoot, "docs", "sample-docs");
         string seatsSample = Path.Combine(samples, "Seats", "SEATS.txt");
-        var protector = new DetectingFeedProtector(files);
+        // The shipped Presidio:DefaultDetection: only the file's custom recognizers and mapped keys act.
+        var protector = new DetectingFeedProtector(files, defaultDetection: false);
 
         // Detection failure: the bridge has no registry for an unconfigured feed name, so the call fails and dead-letters.
         // Every string of the samples is decided by a key, so a made-up string under an undeclared key reaches Presidio.
@@ -198,24 +200,30 @@ internal static class DetectingProtectorChecks
         var made = ParseJson("{\"Customers\":[{\"PaxId\":\"PAX-1001\",\"FirstName\":\"Jordan\",\"lastname\":\"Miller\",\"BookedAsName\":\"MILLER/JORDAN\","
             + "\"MiddleName\":null,\"UARecloc\":\"K7QX2M\",\"SeatNumber\":\"23C\",\"Attributes\":[\"WINDOW\",\"PETINCABIN\"],\"OrderVersion\":4,\"Infant\":false}],"
             + "\"Remarks\":[\"Please book a window seat\",\"REF 1234 MILLER/JORDAN\",\"Contact Alex Sample\",\"2026-11-09\"],"
-            + "\"Nested\":{\"FirstName\":{\"Given\":\"Jordan\"},\"EmpId\":\"2026-11-09\"},\"contacts\":{\"jordan.miller@example.com\":\"HOME\"}}");
+            + "\"Nested\":{\"FirstName\":{\"Given\":\"Jordan\"},\"MiddleName\":[\"ANN\",\"LEE\"],\"LastName\":\"2026-11-09\"},\"contacts\":{\"jordan.miller@example.com\":\"HOME\"}}");
         var madeOutcome = await protector.ProtectAsync(FeedType.Seats, made, CancellationToken.None);
         string Made(string pointer) => madeOutcome.Values[pointer];
         DetectionEvent MadeEvent(string pointer) => madeOutcome.Events.Single(e => e.Pointer == pointer);
-        Check(Made("/Customers/0/FirstName") == "******" && Made("/Customers/0/lastname") == "******" && Made("/Customers/0/BookedAsName") == "*************"
-            && Made("/Customers/0/PaxId") == "********", "mapped keys mask names and passenger IDs at their width, ignoring the key's case");
+        Check(Made("/Customers/0/FirstName") == "******" && Made("/Customers/0/lastname") == "******" && Made("/Customers/0/BookedAsName") == "*************",
+            "mapped keys mask names at their width, ignoring the key's case");
+        Check(Made("/Customers/0/PaxId") == "PAX-1001" && Made("/Customers/0/Attributes/0") == "WINDOW" && Made("/Customers/0/Attributes/1") == "PETINCABIN",
+            "a passenger ID and seat attributes, outside the names-only file, are published unchanged");
         Check(MadeEvent("/Customers/0/FirstName") is { Recognizer: DetectingFeedProtector.EntityMappingRecognizer, Entity: "PERSON", Score: 1, Decision: DetectionDecision.Changed, Operator: "mask" },
             "a mapped key decision names entity_mapping, the entity and the operator, with score 1");
-        Check(Made("/Customers/0/Attributes/0") == "******" && Made("/Customers/0/Attributes/1") == "**********", "array values under a key are that key's entity");
+        Check(Made("/Nested/MiddleName/0") == "***" && Made("/Nested/MiddleName/1") == "***", "array values under a key are that key's entity");
         Check(Made("/Nested/FirstName/Given") == "******", "a string nested under a personal-data key is protected by that key (R-012)");
-        Check(Made("/Nested/EmpId") == "**********", "a mapped key wins over an allow-list item, so a value it declares is never released (R-004)");
+        Check(Made("/Nested/LastName") == "**********", "a mapped key wins over an allow-list item, so a value it declares is never released (R-004)");
         Check(Made("/Customers/0/UARecloc") == "K7QX2M" && Made("/Customers/0/SeatNumber") == "23C" && MadeEvent("/Customers/0/SeatNumber") is { Decision: DetectionDecision.Allowed, Recognizer: DetectingFeedProtector.KeysToSkipRecognizer },
             "skipped keys publish their values unchanged without analysis");
         Check(Made("/Customers/0/OrderVersion") == "4" && Made("/Customers/0/Infant") == "false" && Made("/Customers/0/MiddleName") == ""
             && madeOutcome.Events.Count == JsonFeedParser.StringFields(made).Count, "numbers, booleans and nulls are not candidates and never change");
         Check(Made("/Remarks/0") == "Please book a window seat", "a string in which nothing is detected is published unchanged");
         Check(Made("/Remarks/1") == "REF 1234 *************", "the SURNAME/GIVEN pattern masks a name inside free text under any key");
-        Check(Made("/Remarks/2") == "Contact ***********", "Presidio's PERSON is masked by the PERSON anonymizer");
+        Check(Made("/Remarks/2") == "Contact Alex Sample" && MadeEvent("/Remarks/2") is { Decision: DetectionDecision.NothingDetected, Reasons: ReviewReason.NothingDetected },
+            "with default detection off, a name no definition covers is published unchanged and listed as nothing-detected");
+        Check(madeOutcome.Events.All(e => e.Recognizer is "passengerName" or "none" or "allow_list" or DetectingFeedProtector.EntityMappingRecognizer
+            or DetectingFeedProtector.KeysToSkipRecognizer && !e.Reasons.HasFlag(ReviewReason.SpacyGuess)),
+            "with default detection off, only the file's own definitions decide: no predefined or spaCy decision and no spacy-guess");
         Check(Made("/Remarks/3") == "2026-11-09", "a whole-string allow-list item keeps a timestamp");
         var dynamicKey = MadeEvent("/contacts/jordan.miller@example.com");
         Check(dynamicKey.SafePointer == "/?/?" && dynamicKey.Pattern == "/contacts/jordan.miller@example.com",
@@ -223,10 +231,13 @@ internal static class DetectingProtectorChecks
         Check(MadeEvent("/Customers/0/FirstName").SafePointer == "/?/0/FirstName" && MadeEvent("/Remarks/0").SafePointer == "/?/0",
             "a declared key keeps its name in the value-free pointer, and array indexes stay");
         // WR-016: a number or boolean under a personal-data key cannot be protected in its JSON type, so it dead-letters.
-        await RejectAsync(() => protector.ProtectAsync(FeedType.Seats, ParseJson("{\"Customers\":[{\"PaxId\":1001}]}"), CancellationToken.None),
+        await RejectAsync(() => protector.ProtectAsync(FeedType.Seats, ParseJson("{\"Customers\":[{\"FirstName\":1001}]}"), CancellationToken.None),
             "number or boolean", "a number under a personal-data key dead-letters");
-        await RejectAsync(() => protector.ProtectAsync(FeedType.Seats, ParseJson("{\"Attributes\":[\"WINDOW\",true]}"), CancellationToken.None),
+        await RejectAsync(() => protector.ProtectAsync(FeedType.Seats, ParseJson("{\"LastName\":[\"MILLER\",true]}"), CancellationToken.None),
             "number or boolean", "a boolean nested under a personal-data key dead-letters");
+        var unmappedNumber = await protector.ProtectAsync(FeedType.Seats, ParseJson("{\"Customers\":[{\"PaxId\":1001,\"FirstName\":\"Jordan\"}]}"), CancellationToken.None);
+        Check(unmappedNumber.Values["/Customers/0/PaxId"] == "1001" && unmappedNumber.Values["/Customers/0/FirstName"] == "******",
+            "a number under a key the names-only file does not map is published unchanged");
         // Bytes outside a changed string stay exactly as received: numeric spelling, escapes, whitespace and nulls.
         string spelled = "{ \"OrderVersion\":4.0e0, \"Infant\":false,\"Cabin\":\"\\u0059\",\"FirstName\":\"Em\\u0069ly\",\"MiddleName\":null }";
         var spelledParsed = ParseJson(spelled);
@@ -247,9 +258,10 @@ internal static class DetectingProtectorChecks
             File.WriteAllText(file, content);
             return file;
         }
-        DetectingFeedProtector Configured(string file)
+        DetectingFeedProtector Configured(string file, bool defaultDetection = false)
         {
-            var configured = new DetectingFeedProtector(new Dictionary<FeedType, RecognizerFile> { [FeedType.Seats] = RecognizerFileReader.Read(file, FeedType.Seats) });
+            var configured = new DetectingFeedProtector(new Dictionary<FeedType, RecognizerFile> { [FeedType.Seats] = RecognizerFileReader.Read(file, FeedType.Seats) },
+                defaultDetection);
             configured.Configure();
             return configured;
         }
@@ -257,32 +269,34 @@ internal static class DetectingProtectorChecks
         string noCards = Temporary("<recognizers feed=\"Seats\"><recognizer name=\"CreditCardRecognizer\" type=\"predefined\" enabled=\"false\" />"
             + "<anonymizer entity=\"PERSON\" type=\"mask\" /></recognizers>");
         string withDefault = Temporary("<recognizers feed=\"Seats\"><anonymizer entity=\"PERSON\" type=\"mask\" /><anonymizer entity=\"DEFAULT\" type=\"mask\" /></recognizers>");
+        // These files rely on Presidio's predefined recognizers, so they run with Presidio:DefaultDetection on.
         try
         {
-            var bare = await ProtectStringsAsync(Configured(empty), "Please book a window seat", "Contact Alex Sample", "alex@example.com", "Card 4111 1111 1111 1111");
+            var bare = await ProtectStringsAsync(Configured(empty, defaultDetection: true), "Please book a window seat", "Contact Alex Sample", "alex@example.com",
+                "Card 4111 1111 1111 1111");
             Check(bare[0] == "Please book a window seat", "an emptied file starts and publishes an undetected string unchanged");
             Check(bare[1] == "Contact <PERSON>   " && bare[2] == "<EMAIL_ADDRESS> " && bare[3] == "Card " + "<CREDIT_CARD>".PadRight(19),
-                "with nothing configured Presidio's predefined recognizers detect, and replace is fitted to width");
-            var emptied = await Configured(empty).ProtectAsync(FeedType.Seats, ParseJson("{\"FirstName\":\"Jordan\",\"SeatNumber\":\"23C\"}"), CancellationToken.None);
+                "with default detection on and nothing configured, Presidio's predefined recognizers detect, and replace is fitted to width");
+            var emptied = await Configured(empty, defaultDetection: true).ProtectAsync(FeedType.Seats, ParseJson("{\"FirstName\":\"Jordan\",\"SeatNumber\":\"23C\"}"), CancellationToken.None);
             Check(emptied.Events.All(e => e.SafePointer.EndsWith("/?", StringComparison.Ordinal) && e.Recognizer is not (DetectingFeedProtector.EntityMappingRecognizer or DetectingFeedProtector.KeysToSkipRecognizer)),
                 "without key lists, no property name is declared, mapped or skipped");
-            var switchedOff = await ProtectStringsAsync(Configured(noCards), "Card 4111 1111 1111 1111", "Contact Alex Sample", "alex@example.com");
+            var switchedOff = await ProtectStringsAsync(Configured(noCards, defaultDetection: true), "Card 4111 1111 1111 1111", "Contact Alex Sample", "alex@example.com");
             Check(switchedOff[0] == "Card 4111 1111 1111 1111", "a predefined recognizer switched off detects nothing");
             Check(switchedOff[1] == "Contact ***********" && switchedOff[2] == "<EMAIL_ADDRESS> ", "an entity uses its own anonymizer, else replace");
-            var fallback = await ProtectStringsAsync(Configured(withDefault), "alex@example.com");
+            var fallback = await ProtectStringsAsync(Configured(withDefault, defaultDetection: true), "alex@example.com");
             Check(fallback[0] == "****************", "an entity without its own anonymizer uses DEFAULT");
-            Console.WriteLine("PASS an emptied file runs Presidio's defaults; switches and anonymizers change the output with no code change");
+            Console.WriteLine("PASS with default detection on, an emptied file runs Presidio's defaults; switches and anonymizers change the output with no code change");
 
             // Review reasons as the protector produces them (made-up strings).
-            var guess = await ProtectOutcomeAsync(Configured(withDefault), "Contact Alex Sample", "alex@example.com", "LI WU");
+            var guess = await ProtectOutcomeAsync(Configured(withDefault, defaultDetection: true), "Contact Alex Sample", "alex@example.com", "LI WU");
             Check(guess.Events[0].Reasons.HasFlag(ReviewReason.SpacyGuess) && !guess.Events[0].Reasons.HasFlag(ReviewReason.NoAction),
                 "a spaCy PERSON with its own anonymizer is a spacy-guess, not a no-action");
             Check(guess.Events[1].Reasons.HasFlag(ReviewReason.NoAction) && guess.Events[1].NoActionEntities.Contains("EMAIL_ADDRESS", StringComparison.Ordinal),
                 "an entity that used DEFAULT is a no-action naming that entity");
-            var mixed = await ProtectOutcomeAsync(Configured(noCards), "Contact Alex Sample at alex@example.com");
+            var mixed = await ProtectOutcomeAsync(Configured(noCards, defaultDetection: true), "Contact Alex Sample at alex@example.com");
             Check(mixed.Events[0].NoActionEntities.Contains("EMAIL_ADDRESS", StringComparison.Ordinal) && !mixed.Events[0].NoActionEntities.Contains("PERSON", StringComparison.Ordinal),
                 "the no-action fix names only the entities without their own anonymizer");
-            var cut = await ProtectOutcomeAsync(Configured(empty), "LI WU");
+            var cut = await ProtectOutcomeAsync(Configured(empty, defaultDetection: true), "LI WU");
             Check(Value(cut, 0) == "<PERS" && cut.Events[0].Reasons.HasFlag(ReviewReason.Cut), "a replace result longer than the value is cut and listed as cut");
         }
         finally
@@ -293,11 +307,42 @@ internal static class DetectingProtectorChecks
             protector.Configure();
         }
 
+        // Presidio:DefaultDetection, the four cases on one made-up message: a mapped name and an e-mail address in a note
+        // that no definition covers. Each case reconfigures the Seats registry, so the shipped one is restored afterwards.
+        const string Flagged = "{\"FirstName\":\"JORDAN\",\"Note\":\"mail jordan.miller@example.com\"}";
+        string nothingDefined = Temporary("<recognizers feed=\"Seats\" />");
+        try
+        {
+            Check(await ProtectJsonAsync(protector, Flagged) == "{\"FirstName\":\"******\",\"Note\":\"mail jordan.miller@example.com\"}",
+                "default detection off with definitions: only the mapped key and the custom recognizers act; the e-mail address is published");
+            Check(await ProtectJsonAsync(Configured(Path.Combine(recognizers, "seats.xml"), defaultDetection: true), Flagged) == "{\"FirstName\":\"******\",\"Note\":\"mail *************************\"}",
+                "default detection on with definitions: the mapped key and Presidio's predefined recognizers act, so the e-mail address is masked too");
+            var presidioOnly = Configured(nothingDefined, defaultDetection: true);
+            var presidioParsed = ParseJson(Flagged);
+            var presidioOutcome = await presidioOnly.ProtectAsync(FeedType.Seats, presidioParsed, CancellationToken.None);
+            var note = JsonFeedParser.StringFields(presidioParsed).ToList().FindIndex(f => f.Id.EndsWith("/Note", StringComparison.Ordinal));
+            Check(presidioOutcome.ProtectedCandidateValues![note] == "mail " + "<EMAIL_ADDRESS>".PadRight(25)
+                && presidioOutcome.Events.All(e => e.Recognizer is not (DetectingFeedProtector.EntityMappingRecognizer or "passengerName")),
+                "default detection on without definitions: only Presidio's predefined recognizers act, with Presidio's replace fitted to width");
+            var bareMessage = ParseJson(Flagged);
+            var bareOutcome = await Configured(nothingDefined).ProtectAsync(FeedType.Seats, bareMessage, CancellationToken.None);
+            Check(Codec(FeedType.Seats).Serialize(bareMessage, bareOutcome.Values).AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(Flagged))
+                && bareOutcome.Events.All(e => e.Recognizer == "none" && e.Decision == DetectionDecision.NothingDetected),
+                "default detection off without definitions: the output equals the input byte for byte and nothing is detected");
+            Console.WriteLine("PASS Presidio:DefaultDetection: off acts on the file's definitions only, on adds Presidio's predefined recognizers");
+        }
+        finally
+        {
+            File.Delete(nothingDefined);
+            protector.Configure();
+        }
+
         // Overlaps, keep and hash with custom recognizers (made-up codes): CODE_A covers AB1234 at 0.9 and CODE_B covers
         // 1234CD at 0.7, so CODE_A wins the shared 1234 and CODE_B keeps CD. chars_to_mask counts from CODE_B's own start,
-        // so masking its first two characters changes only what CODE_A already took. spaCy is switched off, because it reads
-        // a made-up code such as AB1234CD as a PERSON and would win the whole string. The key recognizer shows a key's
-        // entity takes its own anonymizer too.
+        // so masking its first two characters changes only what CODE_A already took. These run with the shipped default
+        // detection off, so only the custom recognizers act; spaCy is also switched off by name, because with default
+        // detection on it reads a made-up code such as AB1234CD as a PERSON and would win the whole string. The key
+        // recognizer shows a key's entity takes its own anonymizer too.
         string Codes(string actionA, string actionB) => Temporary("<recognizers feed=\"Seats\">"
             + "<recognizer name=\"CryptoRecognizer\" type=\"predefined\" enabled=\"true\" />"
             + "<recognizer name=\"SpacyRecognizer\" type=\"predefined\" enabled=\"false\" />"
@@ -337,6 +382,7 @@ internal static class DetectingProtectorChecks
             }
             catch (InvalidDataException ex) when (ex.Message.Contains("CreditCardRecogniser", StringComparison.Ordinal))
             {
+                // Names are checked with default detection off too, although no predefined recognizer runs.
             }
             var keyContext = ParseJson("{\"MembershipCode\":\"ZX1234\",\"Remarks\":\"ZX1234\"}");
             var keyOutcome = await Configured(context).ProtectAsync(FeedType.Seats, keyContext, CancellationToken.None);
@@ -344,7 +390,7 @@ internal static class DetectingProtectorChecks
                 "a property name holding a recognizer's context word raises a weak match over the threshold");
             Check(keyOutcome.Values["/Remarks"] == "ZX1234" && keyOutcome.Events[1].Decision == DetectionDecision.BelowThreshold,
                 "the same value under a key without the context word stays below the threshold and is listed for review");
-            Console.WriteLine("PASS overlaps, chars_to_mask, keep, hash and key-path context behave per span and per key; an unknown predefined name stops startup and is named");
+            Console.WriteLine("PASS with default detection off, overlaps, chars_to_mask, keep, hash and key-path context behave per span and per key; an unknown predefined name stops startup and is named");
         }
         finally
         {
@@ -412,17 +458,17 @@ internal static class DetectingProtectorChecks
             "Seats number published unchanged");
         Console.WriteLine("PASS a Seats message with a changed number is published with the number unchanged");
 
-        // WR-019: narrowing a recognizer breaks parity with the frozen baseline before merge. This reconfigures the Seats
-        // registry, so it runs last and restores the shipped configuration afterwards.
+        // WR-019: narrowing a recognizer breaks names-only parity with the frozen baseline before merge. This reconfigures
+        // the Seats registry, so it runs last and restores the shipped configuration afterwards.
         string narrowed = Temporary(File.ReadAllText(Path.Combine(recognizers, "seats.xml"))
             .Replace("<key name=\"FirstName\" entity=\"PERSON\" />", "", StringComparison.Ordinal).Replace("<key name=\"LastName\" entity=\"PERSON\" />", "", StringComparison.Ordinal));
         try
         {
             int reviewedMisses = await ParityMissesAsync(protector, projectRoot, FeedType.Seats);
-            Check(reviewedMisses == 0, "the shipped recognizers must have no unapproved Seats parity miss");
+            Check(reviewedMisses == 0, "the shipped recognizers must have no unapproved Seats names-only parity miss");
             int narrowedMisses = await ParityMissesAsync(Configured(narrowed), projectRoot, FeedType.Seats);
-            Check(narrowedMisses > 0, "a narrowed name recognizer must fail parity");
-            Console.WriteLine($"PASS a narrowed Seats name recognizer fails parity with the frozen baseline ({narrowedMisses} unapproved misses)");
+            Check(narrowedMisses > 0, "a narrowed name recognizer must fail names-only parity");
+            Console.WriteLine($"PASS a narrowed Seats name recognizer fails names-only parity with the frozen baseline ({narrowedMisses} unapproved misses)");
         }
         finally
         {
@@ -436,6 +482,19 @@ internal static class DetectingProtectorChecks
     /// </summary>
     private static DetectionEvent Json(DetectionEvent e, string pointer, string safePointer) =>
         e with { Pointer = pointer, SafePointer = safePointer };
+
+    /// <summary>
+    /// Protects a made-up JSON message and returns the rebuilt, validated output as text.
+    /// </summary>
+    private static async Task<string> ProtectJsonAsync(DetectingFeedProtector protector, string json)
+    {
+        var parsed = ParseJson(json);
+        var outcome = await protector.ProtectAsync(FeedType.Seats, parsed, CancellationToken.None);
+        var codec = Codec(FeedType.Seats);
+        byte[] output = codec.Serialize(parsed, outcome.Values);
+        codec.Validate(parsed, output);
+        return Encoding.UTF8.GetString(output);
+    }
 
     /// <summary>
     /// Protects made-up strings as one parsed JSON message and returns the published values in order.
@@ -459,8 +518,9 @@ internal static class DetectingProtectorChecks
     private static string Value(DetectionOutcome outcome, int slot) => outcome.Values["/Remarks/" + slot.ToString(System.Globalization.CultureInfo.InvariantCulture)];
 
     /// <summary>
-    /// Counts baseline values of one feed that the protector publishes unchanged and that are not approved exceptions
-    /// (WR-019). Value-free: compares the strings at the frozen JSON Pointers only.
+    /// Counts in-scope (PERSON) baseline values of one feed that the protector publishes unchanged and that are not approved
+    /// exceptions (WR-019); other baseline values are out of the names-only scope. Value-free: compares the strings at the
+    /// frozen JSON Pointers only.
     /// </summary>
     /// <param name="protector">The protector to measure.</param>
     /// <param name="projectRoot">The repository root.</param>
@@ -473,7 +533,8 @@ internal static class DetectingProtectorChecks
         var exceptions = approved.RootElement.EnumerateArray().Select(e => (e.GetProperty("sample").GetString(), e.GetProperty("location").GetString())).ToHashSet();
         string folder = FeedCatalog.Get(feed).FolderName;
         int misses = 0;
-        foreach (var group in baseline.RootElement.GetProperty("protected").EnumerateArray().Where(e => e.GetProperty("feed").GetString() == folder)
+        foreach (var group in baseline.RootElement.GetProperty("protected").EnumerateArray()
+            .Where(e => e.GetProperty("feed").GetString() == folder && e.GetProperty("entity").GetString() == "PERSON")
             .GroupBy(e => e.GetProperty("sample").GetString()!))
         {
             string path = Path.Combine(projectRoot, "docs", "sample-docs", folder, group.Key);

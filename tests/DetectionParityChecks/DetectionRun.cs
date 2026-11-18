@@ -1,3 +1,4 @@
+using System.Text.Json;
 using PresidioDemo.Core.Logging;
 using PresidioDemo.Core.Models;
 using PresidioDemo.Core.Pipeline;
@@ -37,13 +38,27 @@ public static class DetectionRun
     public static IFeedCodec Codec(FeedType feed) => FeedCodecRegistry.Create(feed);
 
     /// <summary>
-    /// Loads the recognizer sets and configures the Python bridge. Python must be started.
+    /// Returns the shipped <c>Presidio:DefaultDetection</c> value from the worker's base settings, so the checks run the way
+    /// a deployment without an override does.
+    /// </summary>
+    /// <param name="root">The repository root.</param>
+    /// <returns>The base setting; false when the file does not set it, as the options class defaults it.</returns>
+    public static bool ShippedDefaultDetection(string root)
+    {
+        using var settings = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "src", "PresidioDemo.Worker", "appsettings.json")));
+        return settings.RootElement.GetProperty("Presidio").TryGetProperty("DefaultDetection", out var value) && value.GetBoolean();
+    }
+
+    /// <summary>
+    /// Loads the recognizer sets and configures the Python bridge with the shipped <c>Presidio:DefaultDetection</c> value.
+    /// Python must be started.
     /// </summary>
     /// <param name="root">The repository root.</param>
     /// <returns>The configured protector.</returns>
     public static DetectingFeedProtector CreateProtector(string root)
     {
-        var protector = new DetectingFeedProtector(RecognizerFileReader.ReadAll(Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers")));
+        var protector = new DetectingFeedProtector(RecognizerFileReader.ReadAll(Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers")),
+            ShippedDefaultDetection(root));
         protector.Configure();
         return protector;
     }

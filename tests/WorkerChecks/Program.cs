@@ -29,9 +29,9 @@ var (local, localName) = EnvironmentConfiguration.Build(settingsFile, noVariable
 Require(localName == "Local" && local["Solace:Host"] == "tcp://localhost:55555", "without DOTNET_ENVIRONMENT the file's CurrentEnvironment (Local) applies");
 var (dev, devName) = EnvironmentConfiguration.Build(settingsFile, name => name == EnvironmentConfiguration.EnvironmentVariable ? "Dev" : null);
 Require(devName == "Dev" && dev["Solace:Host"]!.StartsWith("tcps://") && dev["Solace:Vpn"] == "dev-demoair-vpn", "DOTNET_ENVIRONMENT=Dev selects the Dev section");
-Require(local["Messaging:Routes:0:Input"] == "q.seats.raw" && local["Messaging:Routes:1:Feed"] is null
-    && dev["Messaging:Routes:0:Feed"] is null && dev["Messaging:Transport"] == "Solace",
-    "Local lists its own Seats route, Dev lists none (no Dev Seats queues were supplied); shared Messaging settings still apply");
+Require(local["Messaging:Routes:0:Input"] == "q.seats.raw" && dev["Messaging:Routes:0:Input"] == "DEMOAIR.OPS.PIIDEMO.COS.SEATS.MI.1"
+    && local["Messaging:Routes:1:Feed"] is null && dev["Messaging:Routes:1:Feed"] is null && dev["Messaging:Transport"] == "Solace",
+    "each environment lists its own Seats route; shared Messaging settings still apply");
 Reject(() => EnvironmentConfiguration.Build(settingsFile, name => name == EnvironmentConfiguration.EnvironmentVariable ? "QA" : null),
     "an environment without a section stops startup");
 RejectVariant(json => json["Solaceee"] = new JsonObject(), "an unknown top-level section is rejected");
@@ -51,27 +51,29 @@ Require(messaging.Transport == "Solace" && FeedWorkerService.Routes(messaging).K
 var localSeats = FeedWorkerService.Routes(messaging)[FeedType.Seats];
 Require(localSeats.Input == "q.seats.raw" && localSeats.Output == "airline/seats/protected" && localSeats.DeadLetter == "q.seats.dlq",
     "the Local Seats route keeps its queue, topic and dead-letter names");
-// No Dev queue or topic names were supplied for Seats, so the Dev section has no route and stops startup until the
-// deployment supplies one (deploy/.env.dev.example sets Messaging__Routes__0__*).
-Reject(() => MessagingOptions.Load(dev), "Dev without a Seats route stops startup");
-// Fixture names only, as Messaging__Routes__0__* variables would supply them; they are not Dev queue names.
-var devRouted = new ConfigurationBuilder().AddConfiguration(dev).AddInMemoryCollection([new("Messaging:Routes:0:Feed", "Seats"),
-    new("Messaging:Routes:0:Input", "fixture.seats.in"), new("Messaging:Routes:0:Output", "fixture/seats/out"),
-    new("Messaging:Routes:0:DeadLetter", "fixture.seats.dlq")]).Build();
-var devRoutes = FeedWorkerService.Routes(MessagingOptions.Load(devRouted));
-Require(devRoutes.Keys.SequenceEqual([FeedType.Seats]) && devRoutes[FeedType.Seats].Input == "fixture.seats.in"
-    && devRoutes[FeedType.Seats].Output == "fixture/seats/out" && devRoutes[FeedType.Seats].DeadLetter == "fixture.seats.dlq",
-    "a Seats route supplied for Dev is used as given");
-var devEmptyRoute = new ConfigurationBuilder().AddConfiguration(dev).AddInMemoryCollection([new("Messaging:Routes:0:Feed", "Seats"),
+var devRoutes = FeedWorkerService.Routes(MessagingOptions.Load(dev));
+Require(devRoutes.Keys.SequenceEqual([FeedType.Seats]) && devRoutes[FeedType.Seats].Input == "DEMOAIR.OPS.PIIDEMO.COS.SEATS.MI.1"
+    && devRoutes[FeedType.Seats].Output == "demoair/ops/piidemo/seats/protected" && devRoutes[FeedType.Seats].DeadLetter == "DEMOAIR.OPS.PIIDEMO.COS.SEATS.DLQ.1",
+    "Dev routes the Seats feed only, with its queue, topic and dead-letter names");
+// An environment whose settings list no route stops startup.
+{
+    var json = JsonNode.Parse(File.ReadAllText(settingsFile))!;
+    json["Environments"]!["Dev"]!.AsObject().Remove("Messaging");
+    string path = Path.Combine(runRoot, "appsettings.no-routes.json");
+    File.WriteAllText(path, json.ToJsonString());
+    var (noRoutes, _) = EnvironmentConfiguration.Build(path, name => name == EnvironmentConfiguration.EnvironmentVariable ? "Dev" : null);
+    Reject(() => MessagingOptions.Load(noRoutes), "an environment without a Seats route stops startup");
+}
+var emptyRoute = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Routes:0:Feed", "Seats"),
     new("Messaging:Routes:0:Input", ""), new("Messaging:Routes:0:Output", ""), new("Messaging:Routes:0:DeadLetter", "")]).Build();
-Reject(() => MessagingOptions.Load(devEmptyRoute), "the empty Dev route names of deploy/.env.dev.example stop startup until they are filled in");
+Reject(() => MessagingOptions.Load(emptyRoute), "a route with empty queue and topic names stops startup");
 Require(SolaceOptions.Load(local, runRoot, password).ProvisionQueues && !SolaceOptions.Load(dev, runRoot, password).ProvisionQueues,
     "Local and Dev Solace sections validate; only Local creates queues");
 var oneSeats = MessagingOptions.Load(new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Feed", "seats")]).Build());
 Require(oneSeats.Routes.Count == 1 && FeedWorkerService.Routes(oneSeats).Keys.Single() == FeedType.Seats,
     "Messaging:Feed keeps only that feed's route, so one service runs one feed");
-var oneDevSeats = MessagingOptions.Load(new ConfigurationBuilder().AddConfiguration(devRouted).AddInMemoryCollection([new("Messaging:Feed", "Seats")]).Build());
-Require(oneDevSeats.Routes.Single().Input == "fixture.seats.in", "Messaging:Feed selects one route in Dev too");
+var oneDevSeats = MessagingOptions.Load(new ConfigurationBuilder().AddConfiguration(dev).AddInMemoryCollection([new("Messaging:Feed", "Seats")]).Build());
+Require(oneDevSeats.Routes.Single().Input == "DEMOAIR.OPS.PIIDEMO.COS.SEATS.MI.1", "Messaging:Feed selects one route in Dev too");
 RejectMessaging("Messaging:Feed", "IND", "Messaging:Feed without a route is rejected");
 Require(MessagingOptions.Load(local).ConsumersPerTask == 1, "one consumer per feed is the default");
 RejectMessaging("Messaging:ConsumersPerTask", "0", "zero consumers per task is rejected");
@@ -164,6 +166,37 @@ foreach (string outside in new[] { Path.GetFullPath(Path.Combine(runRoot, "..", 
 }
 Require(PresidioOptions.Load(local, runRoot).RecognizerDirectory == Path.GetFullPath("Configuration/recognizers", runRoot),
     "Presidio:RecognizerDirectory resolves against the application folder");
+// Presidio:DefaultDetection: bound and validated with the other Presidio settings, off in the base settings, and set per
+// environment by an environment block or the Presidio__DefaultDetection variable.
+Require(bool.TryParse(local["Presidio:DefaultDetection"], out bool shippedDefault) && !shippedDefault && !PresidioOptions.Load(local, runRoot).DefaultDetection
+    && !PresidioOptions.Load(dev, runRoot).DefaultDetection, "Presidio:DefaultDetection is false in the base settings, so Local and Dev run only what the recognizer files define");
+Require(!PresidioOptions.Load(new ConfigurationBuilder().Build(), runRoot).DefaultDetection, "without a Presidio:DefaultDetection setting the default is false");
+Require(PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DefaultDetection", "true")]).Build(), runRoot).DefaultDetection,
+    "Presidio:DefaultDetection=true binds and turns Presidio's predefined recognizers on");
+{
+    var json = JsonNode.Parse(File.ReadAllText(settingsFile))!;
+    json["Environments"]!["Dev"]!["Presidio"] = new JsonObject { ["DefaultDetection"] = true };
+    string path = Path.Combine(runRoot, "appsettings.default-detection.json");
+    File.WriteAllText(path, json.ToJsonString());
+    var (devOn, _) = EnvironmentConfiguration.Build(path, name => name == EnvironmentConfiguration.EnvironmentVariable ? "Dev" : null);
+    var (localStill, _) = EnvironmentConfiguration.Build(path, noVariables);
+    Require(PresidioOptions.Load(devOn, runRoot).DefaultDetection && !PresidioOptions.Load(localStill, runRoot).DefaultDetection,
+        "an environment block overrides Presidio:DefaultDetection for that environment only");
+}
+Environment.SetEnvironmentVariable("Presidio__DefaultDetection", "true");
+try
+{
+    var (variable, _) = EnvironmentConfiguration.Build(settingsFile, noVariables);
+    Require(PresidioOptions.Load(variable, runRoot).DefaultDetection, "the Presidio__DefaultDetection environment variable overrides the file for one feed service");
+}
+finally { Environment.SetEnvironmentVariable("Presidio__DefaultDetection", null); }
+Reject(() => PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DefaultDetection", "maybe")]).Build(), runRoot),
+    "a Presidio:DefaultDetection value other than true or false stops startup");
+Reject(() => PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DefaultDetections", "true")]).Build(), runRoot),
+    "a misspelled default-detection key stops startup");
+string shippedRecognizers = Path.Combine(project, "src", "PresidioDemo.Core", "Configuration", "recognizers");
+Require(FeedPipelineConfiguration.Load(shippedRecognizers, true).CreateProtector().DefaultDetection && !FeedPipelineConfiguration.Load(shippedRecognizers).CreateProtector().DefaultDetection,
+    "the setting reaches the detecting protector, off unless passed");
 
 // FeedWorker delivery rules
 var options = MessagingOptions.Load(local);

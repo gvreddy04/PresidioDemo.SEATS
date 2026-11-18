@@ -91,6 +91,10 @@ public sealed class FeedWorkerService(IMessagingConnection connection, IMessageC
                 new FeedWorker(pair.Key, pair.Value, messaging, consumer, publisher, processor,
                     loggers.CreateLogger("PresidioDemo.Worker." + FeedCatalog.Get(pair.Key).FolderName), detectionLog: presidio.DetectionLog,
                     detectionLogValues: presidio.WritesValues).RunAsync(stoppingToken))).ToArray();
+            // Value-free, so every run's log shows which recognizers acted.
+            log.LogInformation(pipeline.DefaultDetection
+                ? "Default detection on: the recognizer files' definitions act, plus Presidio's predefined recognizers and spaCy NER."
+                : "Default detection off: only the recognizer files' custom recognizers and mapped keys act; Presidio's predefined recognizers and spaCy NER do not run.");
             if (presidio.WritesValues)
             {
                 log.LogWarning("Detection log on with values: each line also carries the actual decoded value (WR-020). Non-production only.");

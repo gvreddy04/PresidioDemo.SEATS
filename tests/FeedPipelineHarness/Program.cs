@@ -18,8 +18,9 @@ using PresidioDemo.Worker.Pipeline;
 //   <output>/dead-letter/<feed>/<file>        rejected original input, with <file>.reason.txt
 //   <output>/logs/<feed>/<file>.log.txt       full before/after transaction log (contains original data; tests only)
 //   <output>/report.json                      one item per input file
+// --default-detection on|off sets Presidio:DefaultDetection; off (the shipped default) when not given.
 // Exit codes: 0 every file published, 2 at least one rejected, 1 configuration or usage error.
-const string usage = "Usage: FeedPipelineHarness --input <folder> --output <folder> [--recognizer-directory <folder>] [--detection-log on|off|values] [--fail-publishes <n>]";
+const string usage = "Usage: FeedPipelineHarness --input <folder> --output <folder> [--recognizer-directory <folder>] [--detection-log on|off|values] [--default-detection on|off] [--fail-publishes <n>]";
 string project = AppContext.BaseDirectory;
 while (!File.Exists(Path.Combine(project, "PresidioDemo.slnx")))
 {
@@ -29,20 +30,22 @@ var settings = new Dictionary<string, string>
 {
     ["--recognizer-directory"] = Path.Combine(project, "src", "PresidioDemo.Core", "Configuration", "recognizers"),
     ["--detection-log"] = "off",
+    ["--default-detection"] = "off",
     ["--fail-publishes"] = "0"
 };
 var supplied = new HashSet<string>();
 for (int i = 0; i < args.Length; i += 2)
 {
-    if (i + 1 >= args.Length || args[i] is not ("--input" or "--output" or "--recognizer-directory" or "--detection-log" or "--fail-publishes") || !supplied.Add(args[i]))
+    if (i + 1 >= args.Length || args[i] is not ("--input" or "--output" or "--recognizer-directory" or "--detection-log" or "--default-detection" or "--fail-publishes")
+        || !supplied.Add(args[i]))
     {
         Console.Error.WriteLine(usage);
         return 1;
     }
-    settings[args[i]] = args[i] is "--fail-publishes" or "--detection-log" ? args[i + 1] : Path.GetFullPath(args[i + 1]);
+    settings[args[i]] = args[i] is "--fail-publishes" or "--detection-log" or "--default-detection" ? args[i + 1] : Path.GetFullPath(args[i + 1]);
 }
 if (!settings.ContainsKey("--input") || !settings.ContainsKey("--output") || !int.TryParse(settings["--fail-publishes"], out int failPublishes) ||
-    settings["--detection-log"] is not ("on" or "off" or "values"))
+    settings["--detection-log"] is not ("on" or "off" or "values") || settings["--default-detection"] is not ("on" or "off"))
 {
     Console.Error.WriteLine(usage);
     return 1;
@@ -52,7 +55,7 @@ FeedPipelineConfiguration pipeline;
 List<(string Path, FeedType Feed, byte[] Content)> inputs = [];
 try
 {
-    pipeline = FeedPipelineConfiguration.Load(settings["--recognizer-directory"]);
+    pipeline = FeedPipelineConfiguration.Load(settings["--recognizer-directory"], settings["--default-detection"] == "on");
     foreach (string file in Directory.EnumerateFiles(settings["--input"], "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
     {
         if (FeedFileRouting.IsFeedFile(file))
@@ -80,6 +83,7 @@ var messaging = new MessagingOptions
 var routes = FeedWorkerService.Routes(messaging);
 var outcomes = new ConcurrentDictionary<string, FeedWorkerOutcome>();
 Console.WriteLine("Initializing embedded local Presidio and the bundled NLP model...");
+Console.WriteLine("HARNESS " + DefaultDetection(pipeline.DefaultDetection));
 PythonHost.Start();
 try
 {
@@ -157,7 +161,7 @@ for (int i = 0; i < inputs.Count; i++)
     }
 }
 string report = Write(Path.Combine(output, "report.json"), JsonSerializer.SerializeToUtf8Bytes(new { PublishAttempts = broker.PublishAttempts, Items = items }, new JsonSerializerOptions { WriteIndented = true }));
-Write(Path.Combine(output, "detection-summary.txt"), System.Text.Encoding.UTF8.GetBytes(Summary(inputs.Select(input => input.Feed).ToArray(), summary)));
+Write(Path.Combine(output, "detection-summary.txt"), System.Text.Encoding.UTF8.GetBytes(Summary(inputs.Select(input => input.Feed).ToArray(), summary, pipeline.DefaultDetection)));
 Console.WriteLine("Harness report: " + report);
 return items.All(item => item.GetType().GetProperty("Status")!.GetValue(item) as string == "Published") ? 0 : 2;
 
@@ -173,14 +177,21 @@ string Correlation(int i)
     return inputs.Count(input => Path.GetFileName(input.Path).Equals(name, StringComparison.OrdinalIgnoreCase)) > 1 ? $"{i}-{name}" : name;
 }
 
+// Returns the value-free line that says which recognizers acted in this run.
+static string DefaultDetection(bool on) => on
+    ? "Default detection on: the recognizer files' definitions act, plus Presidio's predefined recognizers and spaCy NER."
+    : "Default detection off: only the recognizer files' custom recognizers and mapped keys act; Presidio's predefined recognizers and spaCy NER do not run.";
+
 // Lists, per feed, every review-group field across the run (WR-021), by its key path with array indexes as *, which
 // keeps real property names because this file stays local (in dynamic-key JSON a property name can itself be a value). A
 // path holding anything outside printable ASCII is JSON-encoded, so no name can break or forge a line. No string value is
-// written: only the review reasons, character shapes, a count and the file names.
-static string Summary(IReadOnlyList<FeedType> inputFeeds, IReadOnlyList<(FeedType Feed, string File, IReadOnlyList<DetectionEvent> Events)> detected)
+// written: only the review reasons, character shapes, a count and the file names. The heading says which detection mode ran.
+static string Summary(IReadOnlyList<FeedType> inputFeeds, IReadOnlyList<(FeedType Feed, string File, IReadOnlyList<DetectionEvent> Events)> detected,
+    bool defaultDetection)
 {
     var text = new System.Text.StringBuilder();
     text.AppendLine("Detection summary: review-group fields per feed (value-free; the detection log gives a fix for each)");
+    text.AppendLine(DefaultDetection(defaultDetection));
     foreach (var feed in FeedCatalog.All.Select(f => f.Type).Where(inputFeeds.Contains))
     {
         text.AppendLine();

@@ -1,8 +1,10 @@
 """Run all supplied samples through the real feed workers and retain value-free verification evidence.
 
-Every published sample must keep its MQ metadata and framing, and protect every value of the frozen parity
-baseline (tests/fixtures/parity-baseline.json) unless it is an approved exception (parity-exceptions.json). A negative
-sample listed in EXPECTED_REJECTIONS must be rejected with its reason. Exit 0 when every check passes, 1 otherwise.
+Every published sample must keep its MQ metadata and framing, and protect every PERSON value of the frozen parity
+baseline (tests/fixtures/parity-baseline.json) unless it is an approved exception (parity-exceptions.json). The check is
+names-only: every other baseline value is reported as out of scope, with a count, and never fails the run. The harness runs
+with the shipped Presidio:DefaultDetection (off). A negative sample listed in EXPECTED_REJECTIONS must be rejected with its
+reason. Exit 0 when every check passes, 1 otherwise.
 """
 from collections import Counter
 from datetime import datetime, timezone
@@ -16,7 +18,7 @@ import uuid
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "tests/unit-tests"))
 
-from decoded_text_support import EXPECTED_REJECTIONS, baseline, verify_published
+from decoded_text_support import EXPECTED_REJECTIONS, SCOPE_ENTITY, baseline, in_scope, verify_published
 from pipeline_harness import HARNESS
 
 
@@ -63,11 +65,13 @@ for item in batch["Items"]:
 statuses = Counter(item["Status"] for item in batch["Items"])
 # The harness exits 2 when a message is rejected, 0 when every message is published.
 passed = (completed.returncode == (2 if EXPECTED_REJECTIONS else 0) and all(r["verification"] == "Passed" for r in results)
-          and totals["protected"] + totals["approved_exceptions"] == len(document["protected"]))
+          and totals["protected"] + totals["approved_exceptions"] == len(in_scope(document))
+          and totals["out_of_scope"] == len(document["protected"]) - len(in_scope(document)))
 summary = dict(started_at=started.isoformat(), command=command, application_exit_code=completed.returncode,
-               total_samples=len(results), statuses=dict(statuses), baseline_protected=len(document["protected"]),
+               total_samples=len(results), statuses=dict(statuses), scope=f"names-only ({SCOPE_ENTITY})",
+               baseline_protected=len(document["protected"]), baseline_in_scope=len(in_scope(document)),
                protected=totals["protected"], approved_exceptions=totals["approved_exceptions"],
-               all_checks_passed=passed, samples=results)
+               out_of_scope=totals["out_of_scope"], all_checks_passed=passed, samples=results)
 evidence = run / "verification.json"
 evidence.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 print(json.dumps({key: value for key, value in summary.items() if key != "samples"}, indent=2))
