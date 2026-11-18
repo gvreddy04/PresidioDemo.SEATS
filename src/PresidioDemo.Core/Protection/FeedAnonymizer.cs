@@ -18,7 +18,7 @@ public enum AnonymizerOperator
     /// <summary>Writes a replacement text, by default the entity type in angle brackets.</summary>
     Replace = 1,
 
-    /// <summary>Removes the text; in a fixed-width string the span becomes spaces.</summary>
+    /// <summary>Removes the text; fitted to the width, the span becomes spaces.</summary>
     Redact = 2,
 
     /// <summary>Writes the lowercase hexadecimal hash of the text.</summary>
@@ -57,7 +57,8 @@ public sealed record AnonymizedSpan(string Text, bool Cut);
 
 /// <summary>
 /// Applies the configured Presidio operators in .NET and fits every result to the width of the text it replaces, so a
-/// binary counted string keeps its length (WR-015). Parameter names follow Presidio's anonymizer operators.
+/// protected string keeps its width and every byte outside it stays as received (WR-015). Parameter names follow Presidio's
+/// anonymizer operators.
 /// </summary>
 public static class FeedAnonymizer
 {
@@ -202,7 +203,7 @@ public static class FeedAnonymizer
     }
 
     /// <summary>
-    /// Requires printable ASCII of a length within bounds, because binary strings must stay printable ASCII (WR-016).
+    /// Requires printable ASCII of a length within bounds, so a protected string stays printable ASCII (WR-016).
     /// </summary>
     private static string Printable(string value, int min, int max, string name) =>
         value.Length >= min && value.Length <= max && value.All(c => c is >= ' ' and <= '~') ? value

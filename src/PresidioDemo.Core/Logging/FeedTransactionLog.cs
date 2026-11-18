@@ -105,7 +105,7 @@ public static class FeedTransactionLog
     }
 
     /// <summary>
-    /// Appends the detection log block, placed after the payload hex dump so its binary offsets can be found there.
+    /// Appends the detection log block, placed after the decoded payload so its JSON Pointers can be followed there.
     /// </summary>
     /// <param name="report">The transaction-report buffer receiving diagnostic content.</param>
     /// <param name="detection">The block from <see cref="DetectionLog.FormatBlock"/>, or null when detection did not run.</param>
@@ -115,7 +115,7 @@ public static class FeedTransactionLog
         {
             return;
         }
-        report.AppendLine("Detection (binary offsets count from the start of the payload shown above):");
+        report.AppendLine("Detection (each JSON Pointer locates a string in the payload shown above):");
         report.Append(detection);
         report.AppendLine();
     }

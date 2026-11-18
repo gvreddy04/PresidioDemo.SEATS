@@ -22,20 +22,37 @@ public sealed record CustomPattern(string Name, double Score, string Regex);
 /// </summary>
 /// <param name="Name">The unique recognizer name, shown in logs.</param>
 /// <param name="Entity">The supported entity, such as <c>PERSON</c>.</param>
-/// <param name="Patterns">The patterns; may be empty when a deny list is given.</param>
+/// <param name="Patterns">The patterns; may be empty when a deny list or a key is given.</param>
 /// <param name="Context">Context words that raise a match's score when they appear near it.</param>
 /// <param name="DenyList">Words always detected as the entity.</param>
 /// <param name="DenyListScore">The score of a deny-list match.</param>
+/// <param name="Keys">JSON property names whose whole string value is this entity, at any depth below the property: an
+/// extension of Presidio's format for JSON feeds, matched in .NET ignoring case, with score 1.</param>
 public sealed record CustomRecognizer(string Name, string Entity, IReadOnlyList<CustomPattern> Patterns, IReadOnlyList<string> Context,
-    IReadOnlyList<string> DenyList, double DenyListScore);
+    IReadOnlyList<string> DenyList, double DenyListScore, IReadOnlyList<string> Keys)
+{
+
+    #region Methods
+
+    /// <summary>
+    /// Returns whether this recognizer runs in Presidio: it has a pattern or a deny list, not only keys.
+    /// </summary>
+    /// <returns>True when the bridge registers it.</returns>
+    public bool RunsInPresidio() => Patterns.Count > 0 || DenyList.Count > 0;
+
+    #endregion
+}
 
 /// <summary>
-/// The values published unchanged: a decoded string that matches an item end to end is not analyzed (WR-014).
+/// The values published unchanged: a decoded string that matches an item end to end, or whose own JSON property is an
+/// allowed key, is not analyzed (WR-014).
 /// </summary>
 /// <param name="Regex">Whether items are regular expressions (<c>match="regex"</c>) rather than exact text.</param>
 /// <param name="Items">The items as written.</param>
 /// <param name="Compiled">The whole-string patterns for regex items; empty for exact items.</param>
-public sealed record AllowList(bool Regex, IReadOnlyList<string> Items, IReadOnlyList<Regex> Compiled)
+/// <param name="Keys">JSON property names whose string values are published unchanged: an extension of Presidio's format for
+/// JSON feeds, matched ignoring case against the value's own property name.</param>
+public sealed record AllowList(bool Regex, IReadOnlyList<string> Items, IReadOnlyList<Regex> Compiled, IReadOnlyList<string> Keys)
 {
 
     #region Fields and Constants
@@ -43,11 +60,18 @@ public sealed record AllowList(bool Regex, IReadOnlyList<string> Items, IReadOnl
     /// <summary>
     /// An allow list with no items.
     /// </summary>
-    public static readonly AllowList Empty = new(false, [], []);
+    public static readonly AllowList Empty = new(false, [], [], []);
 
     #endregion
 
     #region Methods
+
+    /// <summary>
+    /// Returns whether a JSON property name is an allowed key.
+    /// </summary>
+    /// <param name="key">The value's own unescaped property name.</param>
+    /// <returns>True when its string values are published unchanged without analysis.</returns>
+    public bool AllowsKey(string key) => key.Length > 0 && Keys.Contains(key, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Returns whether the whole string matches an item.
@@ -79,6 +103,22 @@ public sealed record RecognizerFile(FeedType Feed, string Language, double Thres
     #region Methods
 
     /// <summary>
+    /// Returns the custom recognizer whose keys hold a JSON property name, ignoring case.
+    /// </summary>
+    /// <param name="key">An unescaped JSON property name.</param>
+    /// <returns>The recognizer, or null.</returns>
+    public CustomRecognizer? RecognizerForKey(string key) =>
+        key.Length == 0 ? null : Recognizers.FirstOrDefault(r => r.Keys.Contains(key, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Returns whether the file names a JSON property, as a recognizer key or an allow-list key. Value-free detection log
+    /// locations show only these names (WR-018).
+    /// </summary>
+    /// <param name="key">An unescaped JSON property name.</param>
+    /// <returns>True when the file declares it.</returns>
+    public bool Declares(string key) => RecognizerForKey(key) is not null || AllowList.AllowsKey(key);
+
+    /// <summary>
     /// Returns the action for a detected entity: its own, else <c>DEFAULT</c>, else Presidio's default <c>replace</c>.
     /// </summary>
     /// <param name="entity">The detected entity type.</param>
@@ -91,14 +131,15 @@ public sealed record RecognizerFile(FeedType Feed, string Language, double Thres
     /// <summary>
     /// Returns the JSON document the Python bridge uses to build this feed's Presidio registry.
     /// </summary>
-    /// <returns>Language, switched-off predefined recognizers and custom recognizers; .NET applies the threshold and actions.</returns>
+    /// <returns>Language, switched-off predefined recognizers and the custom recognizers with a pattern or deny list; .NET
+    /// applies the threshold, the keys and the actions.</returns>
     public string ToBridgeJson() => JsonSerializer.Serialize(new
     {
         feed = FeedCatalog.Get(Feed).FolderName,
         language = Language,
         disabled = Disabled,
         enabled = Enabled ?? [],
-        recognizers = Recognizers.Select(r => new
+        recognizers = Recognizers.Where(r => r.RunsInPresidio()).Select(r => new
         {
             name = r.Name,
             entity = r.Entity,
@@ -140,7 +181,7 @@ public static class RecognizerFileReader
     #region Methods
 
     /// <summary>
-    /// Returns the file name of a feed's recognizer XML, such as <c>pnr.xml</c>.
+    /// Returns the file name of a feed's recognizer XML, such as <c>seats.xml</c>.
     /// </summary>
     /// <param name="feed">The feed route.</param>
     /// <returns>The file name.</returns>
@@ -248,18 +289,22 @@ public static class RecognizerFileReader
                     throw Invalid(file, $"has an unknown element <{element.Name.LocalName}>");
             }
         }
+        // A key names one decision only, so a property cannot be both an entity and allowed, or two entities.
+        string? twice = recognizers.SelectMany(r => r.Keys).Concat((allowList ?? AllowList.Empty).Keys)
+            .GroupBy(key => key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Count() > 1)?.Key;
+        Require(twice is null, file, $"key '{twice}' is declared twice");
         return new RecognizerFile(feed, language, threshold, disabled, recognizers, allowList ?? AllowList.Empty, anonymizers, enabled);
     }
 
     /// <summary>
-    /// Reads one custom recognizer: patterns, context words and a deny list.
+    /// Reads one custom recognizer: patterns, context words, a deny list and JSON keys.
     /// </summary>
     private static CustomRecognizer Custom(XElement element, string name, string file)
     {
         Attributes(element, file, "name", "type", "enabled", "supported_entity", "deny_list_score");
         string entity = element.Attribute("supported_entity")?.Value ?? "";
         Require(Regex.IsMatch(entity, "\\A[A-Z][A-Z_]*\\z", RegexOptions.CultureInvariant), file, $"recognizer '{name}' needs an upper-case supported_entity");
-        Children(element, file, "pattern", "context", "deny_list");
+        Children(element, file, "pattern", "context", "deny_list", "key");
         var patterns = new List<CustomPattern>();
         foreach (var pattern in element.Elements("pattern"))
         {
@@ -274,18 +319,20 @@ public static class RecognizerFileReader
         }
         var context = Words(element, "context");
         var denyList = Words(element, "deny_list");
-        Require(patterns.Count > 0 || denyList.Count > 0, file, $"recognizer '{name}' needs a <pattern> or a <deny_list>");
+        var keys = Keys(element, name, file);
+        Require(patterns.Count > 0 || denyList.Count > 0 || keys.Count > 0, file, $"recognizer '{name}' needs a <pattern>, a <deny_list> or a <key>");
         Require(element.Attribute("deny_list_score") is null || denyList.Count > 0, file, $"recognizer '{name}' has deny_list_score but no <deny_list>");
-        return new CustomRecognizer(name, entity, patterns, context, denyList, Score(element, "deny_list_score", 1.0, file));
+        return new CustomRecognizer(name, entity, patterns, context, denyList, Score(element, "deny_list_score", 1.0, file), keys);
     }
 
     /// <summary>
-    /// Reads the allow list: exact text by default, or whole-string regular expressions with <c>match="regex"</c>.
+    /// Reads the allow list: exact text by default, or whole-string regular expressions with <c>match="regex"</c>, and the
+    /// JSON keys whose values are published unchanged.
     /// </summary>
     private static AllowList Allow(XElement element, string file)
     {
         Attributes(element, file, "match");
-        Children(element, file, "item");
+        Children(element, file, "item", "key");
         bool regex = (element.Attribute("match")?.Value ?? "exact") switch
         {
             "exact" => false,
@@ -293,8 +340,26 @@ public static class RecognizerFileReader
             _ => throw Invalid(file, "allow_list match must be exact or regex")
         };
         var items = element.Elements("item").Select(item => item.Value).ToArray();
-        Require(items.Length > 0 && items.All(item => item.Length > 0), file, "allow_list needs non-empty <item> elements");
-        return new AllowList(regex, items, regex ? items.Select(item => Compile(item, file, "allow_list")).ToArray() : []);
+        var keys = Keys(element, "allow_list", file);
+        Require(items.Length + keys.Count > 0 && items.All(item => item.Length > 0), file, "allow_list needs non-empty <item> or <key> elements");
+        return new AllowList(regex, items, regex ? items.Select(item => Compile(item, file, "allow_list")).ToArray() : [], keys);
+    }
+
+    /// <summary>
+    /// Reads the <c>key</c> children: one JSON property name each, trimmed, without control characters, and not the
+    /// <c>*</c> that stands for an array position in a field path.
+    /// </summary>
+    private static IReadOnlyList<string> Keys(XElement element, string name, string file)
+    {
+        var keys = new List<string>();
+        foreach (var key in element.Elements("key"))
+        {
+            Require(!key.HasElements && !key.HasAttributes, file, $"every <key> of '{name}' holds a property name only");
+            string text = key.Value.Trim();
+            Require(text.Length > 0 && text != "*" && !text.Any(char.IsControl), file, $"'{name}' has an empty or invalid <key>");
+            keys.Add(text);
+        }
+        return keys;
     }
 
     /// <summary>
