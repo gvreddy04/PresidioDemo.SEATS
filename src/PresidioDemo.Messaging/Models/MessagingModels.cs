@@ -34,7 +34,7 @@ public sealed record MessageDestination(string Name, DestinationKind Kind)
     /// <summary>
     /// Returns the destination for logs.
     /// </summary>
-    /// <returns>The kind and name, such as topic:airline/pnr/protected.</returns>
+    /// <returns>The kind and name, such as topic:airline/seats/protected.</returns>
     public override string ToString() => $"{Kind.ToString().ToLowerInvariant()}:{Name}";
 
     #endregion

@@ -13,7 +13,7 @@ namespace PresidioDemo.Core.Models;
 /// <param name="Name">The declared field name or reviewed layout identifier.</param>
 /// <param name="Value">The original scalar value or decoded member associated with this declaration.</param>
 /// <param name="Offset">The payload byte offset of the string's first text byte, or null for a field the codec does not
-/// locate in the payload.</param>
+/// locate by offset, such as a JSON field, which its JSON Pointer identifier locates.</param>
 public sealed record FeedField(string Id, string Name, string Value, int? Offset = null);
 
 /// <summary>

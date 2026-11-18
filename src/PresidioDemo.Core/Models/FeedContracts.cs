@@ -8,9 +8,9 @@ namespace PresidioDemo.Core.Models;
 public enum FeedType
 {
     /// <summary>
-    /// The reviewed PNR binary feed route.
+    /// The Seats JSON object feed route.
     /// </summary>
-    PNR = 1
+    Seats = 3
 }
 
 #endregion
@@ -51,7 +51,7 @@ public static class FeedCatalog
     /// <value>The reviewed definitions in their required declaration order.</value>
     public static IReadOnlyList<FeedDefinition> All { get; } = Array.AsReadOnly(new[]
         {
-        new FeedDefinition(FeedType.PNR, "PNR")
+        new FeedDefinition(FeedType.Seats, "Seats")
     });
 
     #endregion

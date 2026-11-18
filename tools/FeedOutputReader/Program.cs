@@ -16,7 +16,7 @@ using PresidioDemo.Worker.Pipeline;
 // Subscribes to the protected output topic of every route in the environment selected in the worker's appsettings.json
 // (DOTNET_ENVIRONMENT, else CurrentEnvironment), like any other subscriber: nothing is removed from a queue, and only messages
 // published while it runs are received. Each message is decoded with its feed's codec and written to a text file with every
-// decoded string, its slot, payload offset and published value (QF-26111602). The file is local diagnostics under the
+// decoded value, its JSON Pointer and published value (QF-26111602). The file is local diagnostics under the
 // git-ignored .test-runs folder; it holds the published (protected) values, never the worker's input.
 const string usage = "Usage: dotnet run --project tools/FeedOutputReader -- [--topic <topic>] [--output <file>] [--count <n>] [--settings <appsettings.json>]";
 string project = AppContext.BaseDirectory;
@@ -139,7 +139,8 @@ static (string Block, string Summary) Describe(int number, FeedType feed, Inboun
         var fields = FeedCodecRegistry.Create(feed).Parse(new FeedMessage(delivery, message.Payload)).Fields;
         string[] locations = fields.Select(Location).ToArray();
         int width = locations.Select(l => l.Length).DefaultIfEmpty(0).Max();
-        block.AppendLine(CultureInfo.InvariantCulture, $"  feed {folder} | format {format} | {message.Payload.Length} bytes | fields={fields.Count} | offsets=payload");
+        string offsets = fields.Any(f => f.Offset is not null) ? " | offsets=payload" : "";
+        block.AppendLine(CultureInfo.InvariantCulture, $"  feed {folder} | format {format} | {message.Payload.Length} bytes | fields={fields.Count}{offsets}");
         block.AppendLine("  Decoded fields (published values)");
         if (fields.Count == 0)
         {
@@ -160,11 +161,16 @@ static (string Block, string Summary) Describe(int number, FeedType feed, Inboun
     }
 }
 
-// Returns where a decoded string sits, as the detection log writes it: slot 12 @0x01A4.
+// Returns where a decoded value sits, as the detection log writes it with values: its JSON Pointer, JSON-encoded when it is
+// not printable ASCII or starts with a quote, so a property name cannot break the line; or slot 12 @0x01A4 for a codec
+// that reports payload offsets.
 static string Location(FeedField field)
 {
-    string slot = field.Name.StartsWith("slot", StringComparison.Ordinal) ? "slot " + field.Name[4..] : field.Id;
-    return field.Offset is int offset ? string.Create(CultureInfo.InvariantCulture, $"{slot} @0x{offset:X4}") : slot;
+    if (field.Offset is int offset)
+    {
+        return string.Create(CultureInfo.InvariantCulture, $"{field.Id} @0x{offset:X4}");
+    }
+    return field.Id.Length > 0 && field.Id[0] != '"' && field.Id.All(c => c is >= ' ' and <= '~') ? field.Id : DetectionLog.Encode(field.Id);
 }
 
 // Returns whether a payload is an IBM MQ export or diagnostic dump (UTF-8 text the MQ reader accepts) rather than raw bytes.

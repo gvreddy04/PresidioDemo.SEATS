@@ -21,7 +21,7 @@ public sealed class SolaceTopicSubscriber(SolaceConnection connection) : IMessag
     /// <summary>
     /// Adds the topic subscription, streams its messages until cancellation, then removes the subscription.
     /// </summary>
-    /// <param name="topic">The topic name; Solace wildcards such as <c>airline/pnr/&gt;</c> are allowed.</param>
+    /// <param name="topic">The topic name; Solace wildcards such as <c>airline/seats/&gt;</c> are allowed.</param>
     /// <param name="cancellationToken">The token that stops receiving.</param>
     /// <returns>The received messages in arrival order.</returns>
     /// <exception cref="InvalidOperationException">The subscription could not be added.</exception>

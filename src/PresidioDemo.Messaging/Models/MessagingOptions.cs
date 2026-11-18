@@ -36,7 +36,7 @@ public sealed class MessagingOptions
     /// <summary>
     /// Gets or sets the one feed this process consumes, so each feed can run as its own scalable service.
     /// </summary>
-    /// <value>A feed name from Messaging:Routes, such as PNR; empty consumes every routed feed.</value>
+    /// <value>A feed name from Messaging:Routes, such as Seats; empty consumes every routed feed.</value>
     public string Feed { get; set; } = "";
 
     /// <summary>
@@ -148,7 +148,7 @@ public sealed class MessageRoute
     public string DeadLetter { get; set; } = "";
 
     /// <summary>
-    /// Gets or sets the feed name, such as PNR.
+    /// Gets or sets the feed name, such as Seats.
     /// </summary>
     /// <value>The feed name.</value>
     public string Feed { get; set; } = "";

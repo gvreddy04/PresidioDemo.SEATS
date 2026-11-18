@@ -15,7 +15,7 @@ public sealed record FeedPipelineConfiguration(IReadOnlyDictionary<FeedType, Rec
     /// <summary>
     /// Loads and validates one recognizer XML file per feed before any input is read (WR-014).
     /// </summary>
-    /// <param name="recognizerDirectory">The directory holding <c>pnr.xml</c>.</param>
+    /// <param name="recognizerDirectory">The directory holding <c>seats.xml</c>.</param>
     /// <returns>The validated configuration.</returns>
     /// <exception cref="InvalidDataException">A file is missing or invalid.</exception>
     public static FeedPipelineConfiguration Load(string recognizerDirectory) => new(RecognizerFileReader.ReadAll(recognizerDirectory));

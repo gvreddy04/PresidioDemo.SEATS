@@ -7,7 +7,7 @@ public static class FeedLoggers
 {
     private static readonly IReadOnlyDictionary<FeedType, FeedLogger> Loggers = new FeedLogger[]
     {
-        new PnrFeedLogger()
+        new SeatsFeedLogger()
     }.ToDictionary(logger => logger.Feed);
 
     /// <summary>Formats a transaction using the logger for the supplied feed.</summary>
