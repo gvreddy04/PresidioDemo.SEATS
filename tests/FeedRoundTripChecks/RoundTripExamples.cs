@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Text;
 using PresidioDemo.Core.Models;
 
@@ -80,15 +79,10 @@ internal static class RoundTripExamples
             examples.Add(new(feed, feed + "/diagnostic-dump", baseline.Sample, "Complete diagnostic dump", ".txt",
                 Diagnostic(baseline.Envelope.Payload)));
 
-            // The generic codec has no field names, so the varied string is chosen by its shape: the first letters-only
-            // string (the PNR surname).
-            var parsed = codecFactory(feed).Parse(Message(feed, "example.bin", baseline.Envelope.Payload));
-            string current = parsed.Fields.First(field => field.Value.Length >= 4 && field.Value.All(char.IsAsciiLetterUpper)).Value;
-            foreach (string replacement in new[] { "", "REED", "STONE", "CARTER", "FOX", "WASHINGTON" })
+            // Lexical and value variations are built independently of the codec under test.
+            foreach (var (name, bytes) in JsonRoundTripExamples.Create(baseline.Envelope.Payload))
             {
-                // Build fixtures independently, rather than use the serializer under test.
-                byte[] payload = ReplaceCountedString(baseline.Envelope.Payload, current, replacement);
-                AddPayload(feed, baseline, $"binary-string-length-{replacement.Length}", "Binary width/padding variation", payload);
+                AddPayload(feed, baseline, name, "JSON value/format variation", bytes);
             }
         }
         return examples.AsReadOnly();
@@ -160,33 +154,6 @@ internal static class RoundTripExamples
             }
         }
         return Encoding.UTF8.GetBytes(output.ToString());
-    }
-
-    /// <summary>
-    /// Changes one fixture XDR string while independently rebuilding its length and padding.
-    /// </summary>
-    /// <param name="payload">The complete decoded payload bytes without transport metadata.</param>
-    /// <param name="original">The complete input or retained parsed representation before protection.</param>
-    /// <param name="replacement">The replacement text used to vary the independent fixture.</param>
-    /// <returns>The complete independently rebuilt fixture bytes.</returns>
-    /// <exception cref="Exception">A regression assertion fails or an expected rejection does not occur.</exception>
-    private static byte[] ReplaceCountedString(byte[] payload, string original, string replacement)
-    {
-        static byte[] Counted(string value)
-        {
-            byte[] bytes = Encoding.ASCII.GetBytes(value);
-            byte[] result = new byte[4 + bytes.Length + ((-bytes.Length) & 3)];
-            BinaryPrimitives.WriteInt32BigEndian(result, bytes.Length);
-            bytes.CopyTo(result, 4);
-            return result;
-        }
-        byte[] source = Counted(original), target = Counted(replacement);
-        int start = payload.AsSpan().IndexOf(source);
-        if (start < 0 || payload.AsSpan(start + 1).IndexOf(source) >= 0)
-        {
-            throw new Exception("Binary fixture field must have exactly one counted-string occurrence.");
-        }
-        return [.. payload.AsSpan(0, start), .. target, .. payload.AsSpan(start + source.Length)];
     }
 
     /// <summary>

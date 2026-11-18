@@ -6,7 +6,7 @@ using PresidioDemo.DetectionParity;
 // Test-only spike for decoded-text detection.
 //   The parity baseline (tests/fixtures/parity-baseline.json) was frozen from the removed field policies and is
 //   read-only; see ParityBaseline.
-//   config-checks   Loads the PNR recognizer file and requires invalid files to stop startup (V-04).
+//   config-checks   Loads the Seats recognizer file and requires invalid files to stop startup (V-04).
 //   bridge-json     Prints each feed's Presidio bridge configuration, one JSON document per line (Python tests).
 //   detection-log on|off   Runs all samples through the decoded-text path and prints the value-free detection log
 //                          when on (V-05). The worker reads the same switch from Presidio:DetectionLog.

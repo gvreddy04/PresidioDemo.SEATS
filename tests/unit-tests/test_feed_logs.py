@@ -2,9 +2,9 @@
 import json
 from pathlib import Path
 import re
-import struct
 import subprocess
 import unittest
+import xml.etree.ElementTree as ET
 
 from pipeline_harness import PROJECT, run
 
@@ -28,19 +28,19 @@ def payload_of(content):
 
 
 def sample_values():
-    """Every decoded value of the supplied samples: their XDR counted strings."""
+    """Every decoded value of the supplied samples and the MQ export fixture: their JSON scalars."""
     values = set()
-    for path in sorted((PROJECT / "docs" / "sample-docs").rglob("*.txt")):
-        payload = payload_of(path.read_bytes())
-        offset = 0
-        while offset + 4 <= len(payload):
-            length = struct.unpack(">I", payload[offset:offset + 4])[0]
-            end = offset + 4 + length
-            if 0 < length <= len(payload) - offset - 4 and all(0x20 <= b <= 0x7E for b in payload[offset + 4:end]):
-                values.add(payload[offset + 4:end].decode("ascii"))
-                offset = end + (-length % 4)
-            else:
-                offset += 4
+    paths = sorted((PROJECT / "docs" / "sample-docs").rglob("*.txt")) + [PROJECT / "tests/unit-tests/fixtures/seats-mq-export.txt"]
+    for path in paths:
+        stack = [json.loads(payload_of(path.read_bytes()).decode("utf-8", errors="replace"))]
+        while stack:
+            item = stack.pop()
+            if isinstance(item, dict):
+                stack.extend(item.values())
+            elif isinstance(item, list):
+                stack.extend(item)
+            elif item is not None:
+                values.add(str(item))
     return values
 
 
@@ -49,8 +49,22 @@ def shape(value):
     return re.sub(r"[0-9]", "9", re.sub(r"[A-Za-z]", "A", value))
 
 
+def declared_keys():
+    """JSON property names declared in the recognizer files; value-free pointers print only these (WR-018)."""
+    folder = PROJECT / "src" / "PresidioDemo.Core" / "Configuration" / "recognizers"
+    return {key.text.strip() for path in folder.glob("*.xml") for key in ET.parse(path).getroot().iter("key")}
+
+
 def leaked_values(text):
-    """Sample values of 4+ characters found in text, except values identical to their own shape (such as 9999)."""
+    """Sample values of 4+ characters found in text, except values identical to their own shape (such as 9999).
+    Declared names in value-free pointers are labels from the recognizer files and are removed before the search;
+    every other pointer segment stays, so a value used as a property name would be found."""
+    declared = declared_keys()
+
+    def scrub(match):
+        return " ".join(s for s in match.group(0).split("/") if s and s != "?" and not s.isdigit() and s not in declared)
+
+    text = re.sub(r"(?<=    )/\S*", scrub, text)
     return sorted(v for v in sample_values() if len(v.strip()) >= 4 and shape(v.strip()) != v.strip() and v.strip() in text)
 
 
@@ -73,16 +87,36 @@ def blocks(text):
     return found
 
 
+def location(line):
+    """The location column of an entry: a value-free pointer, or a JSON-encoded full pointer with values."""
+    body = line[4:]
+    if body.startswith('"'):
+        return json.JSONDecoder().raw_decode(body)[0]
+    return body.split(" ", 1)[0]
+
+
 def values_of(line):
     """The JSON-encoded before and after values of a values-mode entry; after is None when unchanged or not published."""
     body = line[4:]
-    body = body[re.match(r"slot \d+ @0x[0-9A-F]+", body).end():].lstrip()
+    if body.startswith('"'):
+        _, end = json.JSONDecoder().raw_decode(body)
+        body = body[end:]
+    body = body.lstrip()
     before, end = json.JSONDecoder().raw_decode(body)
     rest = body[end:]
     if rest.startswith(" -> \""):
         after, _ = json.JSONDecoder().raw_decode(rest[4:])
         return before, after
     return before, None
+
+
+def json_value(document, pointer):
+    """The scalar at a JSON Pointer."""
+    node = document
+    for segment in [s for s in pointer.split("/") if s]:
+        key = segment.replace("~1", "/").replace("~0", "~")
+        node = node[int(key)] if isinstance(node, list) else node[key]
+    return node
 
 
 def detection_log(state):
@@ -101,8 +135,7 @@ class DetectionLogTests(unittest.TestCase):
         cls.off = detection_log("off")
 
     def test_every_decoded_string_is_listed_once_in_its_group(self):
-        # A message dead-lettered after detection keeps its block with values (WR-020): with no PNR anchor, no recognizer
-        # file can force that rejection any more, so FeedPipelineChecks covers it with a codec whose rebuild check fails.
+        # SEATS_02 is rejected before detection, so it lists no candidates and writes no block.
         expected = sum(int(m.group(1)) for m in re.finditer(r"^SAMPLE \S+ candidates=(\d+)", self.on, re.M))
         found = blocks(self.on)
         self.assertGreater(expected, 0)
@@ -113,8 +146,9 @@ class DetectionLogTests(unittest.TestCase):
             self.assertEqual(int(header.group(4)), len(entries))
             for group, index in (("pii", 5), ("non-pii", 6), ("review", 7)):
                 self.assertEqual(int(header.group(index)), sum(1 for g, _ in entries if g == group))
-            self.assertIsNotNone(header.group(8), "every block names its offset base")
+            self.assertIsNone(header.group(8), "a JSON block locates strings by pointer, so it names no offset base")
             for group, line in entries:
+                self.assertTrue(line.startswith("    /"), "a value-free entry starts with its pointer")
                 tail = TAIL.search(line)
                 self.assertIsNotNone(tail, "an entry ends with recognizer, entity, score, operator and decision")
                 self.assertIn(tail.group(5), DECISIONS[group], "a decision is listed in its own group")
@@ -138,16 +172,16 @@ class DetectionLogTests(unittest.TestCase):
 class FeedLogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.original = (PROJECT / "docs/sample-docs/PNR/PNR_02.txt").read_bytes()
-        cls.harness = run({"PNR/comparison.txt": cls.original}, expect=0, prefix="feed-logs-")
+        cls.original = (PROJECT / "tests/unit-tests/fixtures/seats-mq-export.txt").read_bytes()
+        cls.harness = run({"Seats/comparison.txt": cls.original}, expect=0, prefix="feed-logs-")
         cls.addClassCleanup(cls.harness.cleanup)
 
     def test_one_log_per_transaction_with_complete_before_and_after_sections(self):
         original = self.original
-        item = self.harness.item("PNR", "comparison.txt")
+        item = self.harness.item("Seats", "comparison.txt")
         logs = list((self.harness.output_root / "logs").rglob("*"))
         self.assertEqual([p.name for p in logs if p.is_file()], ["comparison.txt.log.txt"])
-        text = self.harness.log("PNR", "comparison.txt")
+        text = self.harness.log("Seats", "comparison.txt")
         self.assertIn("Transaction: " + item["MessageId"], text)
         self.assertEqual(text.count("BEFORE ANONYMIZATION"), 1)
         before, after = text.split("AFTER ANONYMIZATION")
@@ -163,29 +197,36 @@ class FeedLogTests(unittest.TestCase):
         self.assertLess(before.index("Decoded MQ payload"), before.index("Plain text:"))
         self.assertLess(before.index("Plain text:"), before.index("Detection ("))
         self.assertIn(item["MessageId"] + " DETECTION PUBLISHED", before)
-        output = self.harness.published("PNR", "comparison.txt")
+        output = self.harness.published("Seats", "comparison.txt")
         self.assertLess(after.index("Decoded MQ payload"), after.index("Complete feed data"))
         self.assertIn("Complete feed data (" + str(len(output)) + " bytes):", after)
         self.assertIn(output.decode("utf-8"), after)
 
     def test_the_file_block_carries_values(self):
-        found = blocks(self.harness.log("PNR", "comparison.txt"))
+        found = blocks(self.harness.log("Seats", "comparison.txt"))
         self.assertEqual(len(found), 1)
         self.assertTrue(all(values_of(line)[0] is not None for _, line in found[0]["entries"]))
 
 
 class DetectionLogValuesTests(unittest.TestCase):
-    """WR-020: --detection-log values (as Presidio:DetectionLogValues) adds before and after values to every entry;
-    nothing else changes.
+    """WR-020: --detection-log values (as Presidio:DetectionLogValues) adds before and after values and full pointers to
+    every entry; nothing else changes.
 
     Assertion messages name samples and counts only, never a value."""
+
+    NOTE = "LINE ONE\nSAY \"HI\" \\ X"  # fictional, with a newline, quotes and a backslash
+    ODD_KEY = "Odd\nKey"  # fictional property name with a newline, to show it cannot break a summary line
 
     @classmethod
     def setUpClass(cls):
         samples = PROJECT / "docs" / "sample-docs"
         inputs = {f"{p.parent.name}/{p.name}": p.read_bytes() for p in sorted(samples.rglob("*.txt"))}
+        seats = json.loads(payload_of((samples / "Seats" / "SEATS.txt").read_bytes()))
+        seats["OrderChangeNotif"]["NewContactNote"] = cls.NOTE
+        seats["OrderChangeNotif"][cls.ODD_KEY] = "MADE UP REMARK"
+        inputs["Seats/values-note.bin"] = json.dumps(seats, separators=(",", ":")).encode("utf-8")
         # A truncated payload is rejected before detection, so it must write no block.
-        inputs["PNR/truncated.bin"] = b"\0\0\0"
+        inputs["Seats/truncated.bin"] = b'{"x'
         cls.inputs = inputs
         cls.values = run(inputs, extra_args=["--detection-log", "values"], expect=2, prefix="detection-values-")
         cls.addClassCleanup(cls.values.cleanup)
@@ -215,23 +256,33 @@ class DetectionLogValuesTests(unittest.TestCase):
         self.assertNotIn(" -> ", text)
         leaked = leaked_values(text)
         self.assertEqual(leaked, [], "values found in value-free blocks: " + str(len(leaked)))
+        self.assertNotIn("NewContactNote", text, "an undeclared property name stays ? without the values flag")
 
-    def test_binary_offsets_lead_to_the_value_in_the_decoded_payload(self):
+    def test_an_encoded_value_stays_on_one_line_reads_back_and_shows_its_published_value(self):
+        entries = [line for b in blocks(self.values.console) for _, line in b["entries"] if location(line) == "/OrderChangeNotif/NewContactNote"]
+        self.assertEqual(len(entries), 1)
+        before, after = values_of(entries[0])
+        self.assertEqual(before, self.NOTE)
+        published = json.loads(self.values.published("Seats", "values-note.bin"))
+        self.assertEqual(after if after is not None else before, published["OrderChangeNotif"]["NewContactNote"])
+        self.assertNotIn("LINE ONE\nSAY", self.values.console)
+
+    def test_json_pointers_lead_to_the_value_in_the_decoded_payload(self):
         checked = 0
         for block in blocks(self.values.console):
-            feed, transaction = block["header"].group(1), block["header"].group(2)
-            payload = payload_of(self.inputs[f"{feed}/{Path(self.files[transaction]['Source']).name}"])
+            transaction = block["header"].group(2)
+            document = json.loads(payload_of(self.inputs["Seats/" + Path(self.files[transaction]["Source"]).name]))
             for _, line in block["entries"]:
-                offset = int(re.search(r"@0x([0-9A-F]+)", line).group(1), 16)
                 before, _ = values_of(line)
-                self.assertEqual(payload[offset:offset + len(before)].decode("ascii"), before, f"{feed} offset {offset:#x}")
+                self.assertEqual(json_value(document, location(line)), before, "a pointer leads to its value")
                 checked += 1
         self.assertGreater(checked, 100)
 
     def test_messages_rejected_before_detection_write_no_block(self):
         transactions = {b["header"].group(2) for b in blocks(self.values.console)}
-        item = self.values.status("PNR", "truncated.bin", "Rejected")
-        self.assertNotIn(item["MessageId"], transactions, "PNR/truncated.bin was rejected before detection but has a block")
+        for name in ("SEATS_02_Negative_Testing.txt", "truncated.bin"):
+            item = self.values.status("Seats", name, "Rejected")
+            self.assertNotIn(item["MessageId"], transactions, f"Seats/{name} was rejected before detection but has a block")
 
     def test_every_block_in_the_harness_console_parses_whole(self):
         # Every block line is indented, so any other line inside a block would end it early and its header counts would
@@ -251,15 +302,18 @@ class DetectionLogValuesTests(unittest.TestCase):
         print(f"\nLARGEST-BLOCK {largest} bytes")
         self.assertLess(largest, 200_000)
 
-    def test_the_run_summary_lists_review_fields_by_slot_and_offset_without_values(self):
+    def test_the_run_summary_lists_review_fields_by_real_path_without_values(self):
         summary = (self.values.output_root / "detection-summary.txt").read_text(encoding="utf-8")
-        self.assertRegex(summary, r"(?m)^PNR  review fields \(\d+ files\)$")
-        entries = [line for line in summary.splitlines() if line.startswith("  ")]
-        self.assertGreater(len(entries), 0)
-        self.assertTrue(all(re.match(r"  slot \d+ @0x[0-9A-F]+ +\S+ +seen=\d+ ", line) for line in entries),
-                        "every summary entry is located by slot and payload offset")
-        # Only the entries are scanned; the feed heading is a label.
-        self.assertEqual(leaked_values("\n".join(entries)), [], "values found in the summary")
+        self.assertRegex(summary, r"(?m)^Seats  review fields \(\d+ files\)$")
+        self.assertRegex(summary, r"(?m)^  /OrderChangeNotif/NewContactNote +\S+ +seen=1 .*files=values-note\.bin$")
+        self.assertNotIn(self.NOTE, summary)
+        self.assertNotIn(json.dumps(self.NOTE), summary)
+        # Review R-008: a property name outside printable ASCII is JSON-encoded on its own line.
+        self.assertRegex(summary, r'(?m)^  "/OrderChangeNotif/Odd\\nKey" +\S+ ')
+        self.assertFalse(any(line.startswith("Key") for line in summary.splitlines()), "a property name broke a summary line")
+        # The feed heading is a label (a sample value such as "Seat" is part of "Seats"); only the entries are scanned.
+        entries = "\n".join(line for line in summary.splitlines() if line.startswith("  ")).replace("/OrderChangeNotif/NewContactNote", "")
+        self.assertEqual(leaked_values(entries), [], "values found in the summary")
 
 
 if __name__ == "__main__":

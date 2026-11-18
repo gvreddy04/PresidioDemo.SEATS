@@ -10,7 +10,7 @@ import regex
 PROJECT = Path(__file__).resolve().parents[2]
 RECOGNIZERS = PROJECT / "src" / "PresidioDemo.Core" / "Configuration" / "recognizers"
 SPIKE = PROJECT / "tests" / "DetectionParityChecks" / "bin" / "Debug" / "net10.0" / "DetectionParityChecks.dll"
-FILES = ["pnr.xml"]
+FILES = ["seats.xml"]
 # Presidio's PatternRecognizer compiles with these flags.
 FLAGS = regex.DOTALL | regex.MULTILINE | regex.IGNORECASE
 # Long inputs that make badly nested quantifiers backtrack.

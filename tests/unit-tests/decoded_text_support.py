@@ -5,11 +5,16 @@ value; failures name the sample, location and check only.
 """
 from pathlib import Path
 import json
+import re
 
 PROJECT = Path(__file__).resolve().parents[2]
 FIXTURES = PROJECT / "tests" / "fixtures"
-# No supplied PNR sample is a negative test; a negative sample added later is listed here with its expected reason.
-EXPECTED_REJECTIONS = {}
+# SEATS_02 is the SEATS export with CCSID 437: a JSON feed needs UTF-8, so it is rejected before detection.
+EXPECTED_REJECTIONS = {
+    "SEATS_02_Negative_Testing.txt": "UTF-8 CCSID 1208",
+}
+# A JSON string literal, with its escapes, as it appears in the payload bytes.
+STRING_TOKEN = re.compile(rb'"(?:[^"\\]|\\.)*"')
 
 
 def payload(message):
@@ -32,6 +37,27 @@ def baseline():
     return document, exceptions
 
 
+def json_value(document, location):
+    """Return the scalar at a JSON Pointer such as /OrderChangeNotif/Old/Customers/0/FirstName."""
+    node = document
+    for segment in [s for s in location.split("/") if s]:
+        key = segment.replace("~1", "/").replace("~0", "~")
+        node = node[int(key)] if isinstance(node, list) else node[key]
+    return node
+
+
+def tokens(data):
+    """Split a JSON payload into the bytes between its string literals and the string literals themselves, each marked
+    as a property name (followed by a colon) or a value."""
+    gaps, strings, cursor = [], [], 0
+    for match in STRING_TOKEN.finditer(data):
+        gaps.append(data[cursor:match.start()])
+        strings.append((match.group(0), data[match.end():].lstrip()[:1] == b":"))
+        cursor = match.end()
+    gaps.append(data[cursor:])
+    return gaps, strings
+
+
 def verify_published(feed, name, original, output, document=None, exceptions=None):
     """Check one published sample; return value-free counts, raise AssertionError on a failed check."""
     if document is None:
@@ -44,20 +70,29 @@ def verify_published(feed, name, original, output, document=None, exceptions=Non
         if original.endswith(b"\n") != output.endswith(b"\n"):
             raise AssertionError(f"{name}: final newline changed")
         rows = [len(line) for line in original.splitlines() if line.startswith(b"X ")]
-        # Every protection keeps the width, so the export keeps identical hex rows (WR-004).
-        if rows != [len(line) for line in output.splitlines() if line.startswith(b"X ")]:
+        # Every protection keeps the string's width, so an ASCII payload keeps identical hex rows (WR-004).
+        if before.isascii() and rows != [len(line) for line in output.splitlines() if line.startswith(b"X ")]:
             raise AssertionError(f"{name}: MQ row framing changed")
-    if len(before) != len(after):
-        raise AssertionError(f"{name}: binary payload length changed")
-    # Every action's result is fitted printable ASCII (WR-015, WR-016), whatever operator the recognizer file chooses.
-    for index, (left, right) in enumerate(zip(before, after)):
-        if left != right and not 32 <= right < 127:
-            raise AssertionError(f"{name}: byte {index} changed to a character that is not printable ASCII")
+    # Bytes outside the string values stay exact: structure, whitespace, numbers, booleans, nulls and property names.
+    gaps_before, strings_before = tokens(before)
+    gaps_after, strings_after = tokens(after)
+    if gaps_before != gaps_after or len(strings_before) != len(strings_after):
+        raise AssertionError(f"{name}: bytes outside the JSON strings changed")
+    for index, ((left, key), (right, _)) in enumerate(zip(strings_before, strings_after)):
+        if key and left != right:
+            raise AssertionError(f"{name}: property name {index} changed")
+        if not key and len(json.loads(left)) != len(json.loads(right)):
+            raise AssertionError(f"{name}: string {index} changed its width (WR-015)")
+        # Every action's result is fitted printable ASCII (WR-015, WR-016), whatever operator the recognizer file chooses.
+        if not key and left != right and not all(32 <= ord(c) < 127 for c in json.loads(right)):
+            raise AssertionError(f"{name}: string {index} changed to a character that is not printable ASCII")
+    left_json, right_json = json.loads(before), json.loads(after)
     for entry in document["protected"]:
         if entry["sample"] != name:
             continue
-        start, length = int(entry["location"]), entry["length"]
-        caught = all(b == 0x2A or b != a for b, a in zip(before[start:start + length], after[start:start + length]))
+        old, new = json_value(left_json, entry["location"]), json_value(right_json, entry["location"])
+        # Only characters that were not already * need to change; a value that is all * was masked before it arrived.
+        caught = len(old) == len(new) and all(b == "*" or b != a for b, a in zip(old, new))
         if caught:
             checks["protected"] += 1
         elif (name, entry["location"]) in exceptions:

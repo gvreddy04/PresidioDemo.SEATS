@@ -50,9 +50,9 @@ public static class NoAnonymizationRoundTripChecks
                 foreach (var example in examples)
                 {
                     var codec = Codec(example.Feed);
-                    if (codec is not XdrFeedDecoder)
+                    if (codec is not JsonFeedParser)
                     {
-                        throw new Exception("Binary round trips must exercise the generic XDR codec.");
+                        throw new Exception("Default JSON round trips must exercise the shared System.Text.Json codec.");
                     }
                     byte[] expected = example.Bytes.ToArray();
                     var firstMessage = RoundTripExamples.Message(example.Feed, "case" + example.Extension, example.Bytes);
@@ -111,7 +111,8 @@ public static class NoAnonymizationRoundTripChecks
                 foreach (var feed in FeedCatalog.All)
                 {
                     var baseline = examples.First(example => example.Feed == feed.Type && example.Category == "Supplied raw payload");
-                    byte[] payload = baseline.Bytes;
+                    // Trailing whitespace is valid JSON, so the truncation removes the closing bracket itself.
+                    byte[] payload = System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(baseline.Bytes).TrimEnd());
                     foreach (var invalid in new[] { (Name: "truncated-payload", Bytes: payload[..^1]),
                         (Name: "trailing-garbage", Bytes: payload.Concat(new byte[] { 0x7F }).ToArray()) })
                     {

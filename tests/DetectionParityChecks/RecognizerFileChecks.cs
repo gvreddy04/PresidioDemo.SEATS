@@ -5,8 +5,8 @@ namespace PresidioDemo.DetectionParity;
 
 /// <summary>
 /// Checks the Presidio-style recognizer file reader (WR-014): a valid file loads with its switches, custom recognizers,
-/// allow list and anonymizers, and every invalid or retired form stops startup with a value-free message naming it.
-/// All values are made up.
+/// JSON keys, allow list and anonymizers, and every invalid or retired form stops startup with a value-free message naming
+/// it. All values are made up.
 /// </summary>
 public static class RecognizerFileChecks
 {
@@ -18,11 +18,16 @@ public static class RecognizerFileChecks
     /// </summary>
     private const string Valid = """
         <?xml version="1.0" encoding="utf-8"?>
-        <recognizers feed="PNR" language="en" default_score_threshold="0.6">
+        <recognizers feed="Seats" language="en" default_score_threshold="0.6">
           <recognizer name="CryptoRecognizer" type="predefined" enabled="false" />
           <recognizer name="passengerName" type="custom" supported_entity="PERSON">
             <pattern name="surname/given" score="0.9">(?&lt;![A-Z])[A-Z]{2,}/[A-Z]+</pattern>
             <context>DOCS NAME</context>
+            <key>FirstName</key>
+            <key> LastName </key>
+          </recognizer>
+          <recognizer name="passengerId" type="custom" supported_entity="PASSENGER_ID">
+            <key>PaxId</key>
           </recognizer>
           <recognizer name="titles" type="custom" supported_entity="TITLE" deny_list_score="0.8">
             <deny_list>MR MRS DR</deny_list>
@@ -33,6 +38,8 @@ public static class RecognizerFileChecks
           <allow_list match="regex">
             <item>\d{4}</item>
             <item>FQT[RS]</item>
+            <key>SeatNumber</key>
+            <key>UARecloc</key>
           </allow_list>
           <anonymizer entity="PERSON" type="mask" masking_char="*" />
           <anonymizer entity="TITLE" type="replace" new_value="[T]" />
@@ -58,27 +65,38 @@ public static class RecognizerFileChecks
             var file = Load(scratch, Valid);
             Check(file.Language == "en" && file.Threshold == 0.6, "root attributes are read", ref passed);
             Check(file.Disabled.SequenceEqual(["CryptoRecognizer"]), "a predefined recognizer with enabled=\"false\" is switched off", ref passed);
-            Check(file.Recognizers.Select(r => r.Name).SequenceEqual(["passengerName", "titles"]), "custom recognizers load; a disabled one is left out", ref passed);
+            Check(file.Recognizers.Select(r => r.Name).SequenceEqual(["passengerName", "passengerId", "titles"]), "custom recognizers load; a disabled one is left out", ref passed);
             var name = file.Recognizers[0];
             Check(name.Entity == "PERSON" && name.Patterns.Single() is { Name: "surname/given", Score: 0.9 } && name.Context.SequenceEqual(["DOCS", "NAME"]),
                 "a pattern keeps its name and score, context words are split on spaces", ref passed);
-            Check(file.Recognizers[1].DenyList.SequenceEqual(["MR", "MRS", "DR"]) && file.Recognizers[1].DenyListScore == 0.8, "a deny list and its score load", ref passed);
+            Check(file.Recognizers[2].DenyList.SequenceEqual(["MR", "MRS", "DR"]) && file.Recognizers[2].DenyListScore == 0.8, "a deny list and its score load", ref passed);
+            // JSON keys, this worker's extension of Presidio's format: matched ignoring case, trimmed, one decision per key.
+            Check(name.Keys.SequenceEqual(["FirstName", "LastName"]) && file.RecognizerForKey("lastname")?.Name == "passengerName"
+                && file.RecognizerForKey("PaxId") is { Name: "passengerId", Patterns.Count: 0 } && file.RecognizerForKey("SeatNumber") is null,
+                "recognizer keys load trimmed and match property names ignoring case", ref passed);
+            Check(file.AllowList.AllowsKey("seatnumber") && file.AllowList.AllowsKey("UARecloc") && !file.AllowList.AllowsKey("FirstName") && !file.AllowList.AllowsKey("")
+                && file.Declares("PAXID") && file.Declares("SeatNumber") && !file.Declares("Remarks"), "allow-list keys load, and the file declares only the names it lists", ref passed);
+            Check(!file.ToBridgeJson().Contains("passengerId", StringComparison.Ordinal) && file.ToBridgeJson().Contains("\"passengerName\"", StringComparison.Ordinal)
+                && !file.ToBridgeJson().Contains("FirstName", StringComparison.Ordinal), "a key-only recognizer stays in .NET; keys never reach the bridge", ref passed);
             Check(file.AllowList.MatchesWhole("1405") && file.AllowList.MatchesWhole("fqtr") && !file.AllowList.MatchesWhole("XXXX1111")
                 && !file.AllowList.MatchesWhole("APPR 1234 OK"), "allow-list items match whole strings only", ref passed);
             Check(file.ActionFor("PERSON") is ({ Operator: AnonymizerOperator.Mask, MaskingChar: '*' }, true)
                 && file.ActionFor("CREDIT_CARD") is ({ Operator: AnonymizerOperator.Mask, MaskingChar: '#' }, false),
                 "an entity uses its own anonymizer, else DEFAULT", ref passed);
-            var bare = Load(scratch, "<recognizers feed=\"PNR\" />");
+            var bare = Load(scratch, "<recognizers feed=\"Seats\" />");
             Check(bare.Disabled.Count == 0 && bare.Recognizers.Count == 0 && bare.Threshold == 0.5 && !bare.AllowList.MatchesWhole("1405")
-                && bare.ActionFor("PERSON") is ({ Operator: AnonymizerOperator.Replace }, false), "an empty file loads with Presidio's defaults and replace", ref passed);
-            Check(Load(scratch, "<recognizers feed=\"PNR\"><allow_list><item>FQTR</item></allow_list></recognizers>").AllowList is { Regex: false } exact
+                && bare.ActionFor("PERSON") is ({ Operator: AnonymizerOperator.Replace }, false) && bare.AllowList.Keys.Count == 0
+                && bare.RecognizerForKey("FirstName") is null, "an empty file loads with Presidio's defaults and replace, and no keys", ref passed);
+            Check(Load(scratch, "<recognizers feed=\"Seats\"><allow_list><key>Cabin</key></allow_list></recognizers>").AllowList is { Items.Count: 0 } keysOnly
+                && keysOnly.AllowsKey("Cabin") && !keysOnly.MatchesWhole("Cabin"), "an allow list may hold keys only", ref passed);
+            Check(Load(scratch, "<recognizers feed=\"Seats\"><allow_list><item>FQTR</item></allow_list></recognizers>").AllowList is { Regex: false } exact
                 && exact.MatchesWhole("FQTR") && !exact.MatchesWhole("fqtr"), "an exact allow list compares the whole text exactly", ref passed);
             Check(file.ToBridgeJson().Contains("\"disabled\":[\"CryptoRecognizer\"]", StringComparison.Ordinal)
                 && file.ToBridgeJson().Contains("\"denyList\":[\"MR\",\"MRS\",\"DR\"]", StringComparison.Ordinal), "the bridge JSON carries switches and deny lists", ref passed);
 
-            Reject(scratch, "<recognizers feed=\"PNR\"", "not well-formed XML", ref passed);
-            Reject(scratch, "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x \"y\">]><recognizers feed=\"PNR\" />", "a DTD", ref passed);
-            Reject(scratch, Valid.Replace("feed=\"PNR\"", "feed=\"OTHER\""), "the wrong feed attribute", ref passed);
+            Reject(scratch, "<recognizers feed=\"Seats\"", "not well-formed XML", ref passed);
+            Reject(scratch, "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x \"y\">]><recognizers feed=\"Seats\" />", "a DTD", ref passed);
+            Reject(scratch, Valid.Replace("feed=\"Seats\"", "feed=\"PNR\""), "the wrong feed attribute", ref passed);
             Reject(scratch, Valid.Replace("language=\"en\"", "language=\"de\""), "a language other than en", ref passed);
             Reject(scratch, Valid.Replace("0.6", "1.5"), "a threshold above 1", ref passed);
             Reject(scratch, Valid.Replace("ORD\\d+", "(unclosed"), "a pattern that does not compile", ref passed);
@@ -90,7 +108,14 @@ public static class RecognizerFileChecks
             Reject(scratch, Valid.Replace("type=\"predefined\"", "type=\"builtin\""), "an unknown recognizer type", ref passed);
             Reject(scratch, Valid.Replace("enabled=\"false\" />", "enabled=\"no\" />"), "an enabled value other than true or false", ref passed);
             Reject(scratch, Valid.Replace("supported_entity=\"PERSON\"", "supported_entity=\"person\""), "a lower-case entity", ref passed);
-            Reject(scratch, Valid.Replace("<deny_list>MR MRS DR</deny_list>", ""), "a custom recognizer without a pattern or deny list", ref passed);
+            Reject(scratch, Valid.Replace("<deny_list>MR MRS DR</deny_list>", ""), "a custom recognizer without a pattern, deny list or key", ref passed);
+            Reject(scratch, Valid.Replace("<key>PaxId</key>", "<key> </key>"), "an empty key", ref passed);
+            Reject(scratch, Valid.Replace("<key>PaxId</key>", "<key>*</key>"), "the array-position key *", ref passed);
+            Reject(scratch, Valid.Replace("<key>PaxId</key>", "<key><name>PaxId</name></key>"), "a key with a child element", ref passed);
+            Reject(scratch, Valid.Replace("<key>PaxId</key>", "<key>firstname</key>"), "one key on two recognizers, ignoring case", ref passed, "declared twice");
+            Reject(scratch, Valid.Replace("<key>SeatNumber</key>", "<key>PaxId</key>"), "one key on a recognizer and in the allow list", ref passed, "declared twice");
+            Reject(scratch, Valid.Replace("<allow_list match=\"regex\">", "<allow_list match=\"regex\"><!--").Replace("</allow_list>", "--></allow_list>"),
+                "an allow list without items or keys", ref passed);
             Reject(scratch, Valid.Replace("type=\"replace\" new_value=\"[T]\"", "type=\"encrypt\" key=\"k\""), "the encrypt operator", ref passed);
             Reject(scratch, Valid.Replace("type=\"replace\" new_value=\"[T]\"", "type=\"custom\""), "the custom operator", ref passed);
             Reject(scratch, Valid.Replace("type=\"replace\" new_value=\"[T]\"", "type=\"surrogate_ahds\""), "the surrogate_ahds operator", ref passed);
@@ -116,13 +141,13 @@ public static class RecognizerFileChecks
     }
 
     /// <summary>
-    /// Writes the content as <c>pnr.xml</c> and reads it.
+    /// Writes the content as <c>seats.xml</c> and reads it.
     /// </summary>
     private static RecognizerFile Load(string scratch, string content)
     {
-        string path = Path.Combine(scratch, "pnr.xml");
+        string path = Path.Combine(scratch, "seats.xml");
         File.WriteAllText(path, content);
-        return RecognizerFileReader.Read(path, FeedType.PNR);
+        return RecognizerFileReader.Read(path, FeedType.Seats);
     }
 
     /// <summary>
@@ -134,7 +159,7 @@ public static class RecognizerFileChecks
         {
             Load(scratch, content);
         }
-        catch (InvalidDataException ex) when (ex.Message.StartsWith("Recognizer file pnr.xml", StringComparison.Ordinal)
+        catch (InvalidDataException ex) when (ex.Message.StartsWith("Recognizer file seats.xml", StringComparison.Ordinal)
             && (phrase is null || ex.Message.Contains(phrase, StringComparison.Ordinal)))
         {
             Console.WriteLine("PASS rejected " + label + " (" + ex.Message + ")");

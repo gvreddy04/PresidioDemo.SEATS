@@ -3,133 +3,224 @@ using System.Text.Json;
 using PresidioDemo.Core.Decoder;
 using PresidioDemo.Core.Models;
 using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Core.Protection;
 
 #region Execution
 
-// Generic XDR codec checks (V-03). Output is value-free: offsets, lengths and counts only.
+// Generic JSON codec checks (V-03): the shared System.Text.Json codec against an independent JSON reader, the frozen
+// baseline locations, exact round trips and fail-closed validation. Output is value-free: names, counts and locations only.
 string project = AppContext.BaseDirectory;
 while (!File.Exists(Path.Combine(project, "PresidioDemo.slnx")))
 {
     project = Directory.GetParent(project)?.FullName ?? throw new Exception("Project root not found.");
 }
-// Candidate counts measured against the removed per-feed schemas in T-003 (the scanner found exactly the schema strings
-// of four or more characters), and the frozen value-free parity baseline.
-var expectedCandidates = new Dictionary<string, int>
+int checks = 0;
+// Scalar and string counts of the supplied samples and the two-passenger fixture, as the independent reader below finds them.
+var expectedScalars = new Dictionary<string, (int Scalars, int Strings)>
 {
-    ["PNR.txt"] = 89, ["PNR_02.txt"] = 32
+    ["SEATS.txt"] = (59, 58), ["SEATS_03.txt"] = (51, 50), ["seats-mq-export.txt"] = (106, 105)
 };
 using var baseline = JsonDocument.Parse(File.ReadAllText(Path.Combine(project, "tests", "fixtures", "parity-baseline.json")));
 var locations = baseline.RootElement.GetProperty("protected").EnumerateArray().Concat(baseline.RootElement.GetProperty("pnrs").EnumerateArray())
-    .Where(e => e.GetProperty("feed").GetString() == "PNR")
-    .Select(e => (Sample: e.GetProperty("sample").GetString()!, Offset: int.Parse(e.GetProperty("location").GetString()!), Length: e.GetProperty("length").GetInt32()))
+    .Where(e => e.GetProperty("feed").GetString() == "Seats")
+    .Select(e => (Sample: e.GetProperty("sample").GetString()!, Pointer: e.GetProperty("location").GetString()!, Length: e.GetProperty("length").GetInt32()))
     .ToArray();
-var samples = Directory.EnumerateFiles(Path.Combine(project, "docs", "sample-docs"), "*.txt", SearchOption.AllDirectories)
-    .Order(StringComparer.Ordinal)
-    .Select(path => (Path: path, Feed: FeedFileRouting.FromPath(path)))
-    .ToArray();
-Check(samples.Length == 2, "2 PNR samples expected, found " + samples.Length);
+var recognizers = RecognizerFileReader.ReadAll(Path.Combine(project, "src", "PresidioDemo.Core", "Configuration", "recognizers"))[FeedType.Seats];
+var codec = FeedCodecRegistry.Create(FeedType.Seats);
+Check(codec is SeatsParser and JsonFeedParser, "the registry selects the Seats parser over the shared System.Text.Json codec");
 
+var samples = Directory.EnumerateFiles(Path.Combine(project, "docs", "sample-docs"), "*.txt", SearchOption.AllDirectories).Order(StringComparer.Ordinal)
+    .Append(Path.Combine(project, "tests", "unit-tests", "fixtures", "seats-mq-export.txt")).ToArray();
+Check(samples.Length == 4 && samples.Take(3).All(path => FeedFileRouting.FromPath(path) == FeedType.Seats),
+    "3 Seats samples and the two-passenger fixture are checked, found " + samples.Length);
 int compared = 0;
-foreach (var (path, feed) in samples)
+foreach (string path in samples)
 {
     string name = Path.GetFileName(path);
-    var message = new FeedMessage(new FeedDelivery(feed, Guid.NewGuid(), name, path), File.ReadAllBytes(path));
-    var codec = FeedCodecRegistry.Create(feed);
+    byte[] original = File.ReadAllBytes(path);
+    var message = Message(original, name);
+    if (name.Contains("Negative_Testing", StringComparison.Ordinal))
+    {
+        // SEATS_02 is the SEATS export with CCSID 437: JSON needs UTF-8, and no code-page conversion is guessed.
+        Reject(() => codec.Parse(message), name + ": an MQ export without CCSID 1208");
+        Console.WriteLine($"PASS {name,-30} rejected before detection: its MQ export is not CCSID 1208");
+        continue;
+    }
+    var envelope = FeedPayloadReader.Read(message);
     var parsed = codec.Parse(message);
-    var candidates = XdrFeedDecoder.Candidates(parsed);
+    var independent = Independent(envelope.Payload);
+    var strings = JsonFeedParser.StringFields(parsed);
+    Check(parsed.Fields.SequenceEqual(independent), name + ": the independent JSON reader agrees on every scalar, path and value");
+    Check(parsed.Fields.Count == expectedScalars[name].Scalars && strings.Count == expectedScalars[name].Strings,
+        $"{name}: {parsed.Fields.Count} scalars and {strings.Count} string candidates, expected {expectedScalars[name]}");
+    using (var document = JsonDocument.Parse(envelope.Payload))
+    {
+        Check(strings.Count == CountStrings(document.RootElement), name + ": every JSON string scalar is a detection candidate");
+    }
 
-    // A-002: the scanner still finds the strings the removed schemas held, and every baseline value of four or more
-    // characters lies inside one candidate (shorter ones are raw words, WR-015).
-    Check(candidates.Count == expectedCandidates[name], $"{name}: {candidates.Count} candidates, expected {expectedCandidates[name]}");
+    // A-002: every frozen baseline location (protected value or PNR) is one string candidate of the baseline length.
     foreach (var location in locations.Where(l => l.Sample == name))
     {
-        bool inside = candidates.Any(c => location.Offset >= c.Offset && location.Offset + location.Length <= c.Offset + c.Length);
-        var containing = candidates.FirstOrDefault(c => location.Offset >= c.Offset && location.Offset < c.Offset + c.Length);
-        Check(inside || containing is null, $"{name}: a baseline value at offset {location.Offset} crosses a candidate boundary");
-        Check(inside || location.Length < XdrTextScanner.MinimumLength || IsShortString(envelopeOf(message), location.Offset, location.Length),
-            $"{name}: baseline value at offset {location.Offset} is not inside a candidate");
+        var candidate = strings.SingleOrDefault(field => field.Id == location.Pointer);
+        Check(candidate is not null && candidate.Value.Length == location.Length, $"{name}: baseline location {location.Pointer} is a string candidate of its length");
+        compared++;
     }
-    compared += candidates.Count;
 
-    // Unchanged values rebuild the original bytes exactly.
+    // Unchanged values rebuild the original bytes exactly, as an MQ export and as a raw payload.
     var unchanged = parsed.Fields.ToDictionary(f => f.Id, f => f.Value);
     byte[] same = codec.Serialize(parsed, unchanged);
-    Check(same.AsSpan().SequenceEqual(message.Content.Span), name + ": unmasked round trip changed bytes");
     codec.Validate(parsed, same);
+    Check(same.AsSpan().SequenceEqual(original), name + ": exact MQ export round trip");
+    var raw = codec.Parse(Message(envelope.Payload, "raw.bin"));
+    Check(codec.Serialize(raw, raw.Fields.ToDictionary(f => f.Id, f => f.Value)).AsSpan().SequenceEqual(envelope.Payload), name + ": exact raw JSON round trip");
 
-    // Full-width masks keep framing, length and the string layout.
-    var masked = parsed.Fields.ToDictionary(f => f.Id, f => new string('*', f.Value.Length));
+    // Same-width masks of every string keep the length, the MQ metadata and hex rows, and every other value.
+    var stringIds = strings.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
+    var masked = parsed.Fields.ToDictionary(f => f.Id, f => stringIds.Contains(f.Id) ? new string('*', f.Value.Length) : f.Value);
     byte[] protectedContent = codec.Serialize(parsed, masked);
     codec.Validate(parsed, protectedContent);
-    Check(protectedContent.Length == message.Content.Length, name + ": masked message changed length");
+    var afterMask = FeedPayloadReader.Read(Message(protectedContent, name));
+    Check(protectedContent.Length == original.Length && afterMask.Header == envelope.Header && afterMask.HexRowBytes == envelope.HexRowBytes
+        && Independent(afterMask.Payload).All(field => field.Value == masked[field.Id]), name + ": same-width masks keep the length, metadata and every other value");
 
-    // A changed width is refused.
-    var first = parsed.Fields[0];
-    Reject(() => codec.Serialize(parsed, unchanged.ToDictionary(p => p.Key, p => p.Key == first.Id ? p.Value + "X" : p.Value)), name + ": width change");
+    // The recognizer keys protect their values with their anonymizers; allowed keys and every other value stay unchanged.
+    var protectedByKey = parsed.Fields.ToDictionary(f => f.Id, f => ByKey(recognizers, f, stringIds));
+    byte[] keyed = codec.Serialize(parsed, protectedByKey);
+    codec.Validate(parsed, keyed);
+    var independentAfter = Independent(FeedPayloadReader.Read(Message(keyed, name)).Payload);
+    Check(independentAfter.Count == independent.Count && independentAfter.All(field => field.Value == protectedByKey[field.Id])
+        && protectedByKey.Count(pair => pair.Value != unchanged[pair.Key]) > 0, name + ": the independent reader confirms every key protection and kept value");
+    Check(independent.Where(f => recognizers.AllowList.AllowsKey(Key(f.Name))).All(f => protectedByKey[f.Id] == f.Value),
+        name + ": allowed keys, including the PNR, stay unchanged");
+    var reparsed = codec.Parse(Message(keyed, name));
+    Check(codec.Serialize(reparsed, reparsed.Fields.ToDictionary(f => f.Id, f => f.Value)).AsSpan().SequenceEqual(keyed), name + ": the protected export parses and re-encodes exactly");
 
-    // A changed byte outside the strings is refused.
-    var envelope = FeedPayloadReader.Read(message);
+    // A changed number and a changed byte outside the strings are refused.
+    var number = parsed.Fields.First(f => !stringIds.Contains(f.Id));
+    Reject(() => codec.Serialize(parsed, unchanged.ToDictionary(p => p.Key, p => p.Key == number.Id ? p.Value + "0" : p.Value)), name + ": a number change");
     byte[] tamperedPayload = envelope.Payload.ToArray();
-    int outside = Enumerable.Range(0, tamperedPayload.Length).First(i => !candidates.Any(c => i >= c.Offset && i < c.Offset + c.Length));
-    tamperedPayload[outside] ^= 0x01;
-    Reject(() => codec.Validate(parsed, envelope.Serialize(tamperedPayload)), name + ": changed raw word");
-
-    Console.WriteLine($"PASS {name,-14} {candidates.Count,3} candidates | baseline locations inside candidates or short raw words");
+    int colon = Array.IndexOf(tamperedPayload, (byte)':');
+    tamperedPayload[colon - 2] ^= 0x01;
+    Reject(() => codec.Validate(parsed, envelope.Serialize(tamperedPayload)), name + ": a changed property-name byte");
+    Console.WriteLine($"PASS {name,-30} {parsed.Fields.Count,3} scalars, {strings.Count,3} string candidates | baseline locations are string candidates");
 }
 
-// Unaligned payloads are framing failures.
-Reject(() => XdrTextScanner.Scan(new byte[] { 0, 0, 0 }), "unaligned payload");
-// Short spans are never candidates.
-Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 3, 0x31, 0x32, 0x41, 0 }).Count == 0, "3-character span must stay raw words");
-Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0x44, 0x45, 0x4E, 0x31 }).Count == 1, "4-character string must be a candidate");
-// Non-printable text or non-zero padding is not a string.
-Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 5, 0x41, 0x42, 0x43, 0x44, 0x45, 1, 0, 0 }).Count == 0, "non-zero padding must not be a string");
-// Text in another encoding cannot be checked for personal data, so it fails closed (WR-016), as the removed schemas did.
-Reject(() => XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0x41, 0x09, 0x43, 0x44 }), "a tab inside a counted string");
-Reject(() => XdrTextScanner.Scan(new byte[] { 0, 0, 0, 6, 0x4D, 0xDC, 0x4C, 0x4C, 0x45, 0x52, 0, 0 }), "Latin-1 text (MÜLLER)");
-Reject(() => XdrTextScanner.Scan(new byte[] { 0, 0, 0, 5, 0xE2, 0xD4, 0xC9, 0xE3, 0xC8, 0, 0, 0 }), "EBCDIC text");
-// Integers almost always hold NUL bytes, so a length-like word followed by an integer stays raw words.
-Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0xFF, 0xFF, 0xFF, 0x00 }).Count == 0, "an integer with a NUL byte stays raw words");
-Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0, 0, 0, 0 }).Count == 0, "NUL bytes stay raw words");
-// A count followed by integer bytes without NUL (R-013) is not text in another encoding.
-Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0x8A, 0x1B, 0x2C, 0x3D }).Count == 0, "a count followed by integer bytes stays raw words");
-// WR-015: the words 00000001 31000000 read as a one-character string "1" but are raw words, never a candidate.
-Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 1, 0x31, 0, 0, 0 }).Count == 0, "a one-character counted string stays raw words");
-// Lowercase and mixed-case EBCDIC (code page 500) must fail closed too, not pass as raw words (review R-001). Fictional values.
-Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-var ebcdic = Encoding.GetEncoding(500);
-foreach (string text in new[] { "miller/jordan", "Jordan Miller", "jordan.miller@example.com", "row 23c window" })
+// Lexical forms, escapes and malformed JSON, independent of the samples. Values are made up.
+ParsedFeed Parse(string json) => codec.Parse(Message(Encoding.UTF8.GetBytes(json)));
+var lexical = Parse(" {\"UARecloc\":\"K7QX2M\", \"Customers\":[{\"PaxId\":\"PAX-1001\",\"FirstName\":\"Em\\u0069ly\"},{\"PaxId\":\"PAX-1002\",\"FirstName\":\"Michael\"}],\"x/y~z\":\"Carter\",\"Count\":1e+02,\"Active\":true,\"Optional\":null,\"Empty\":[],\"Object\":{}} \n");
+var values = lexical.Fields.ToDictionary(field => field.Id, field => field.Value);
+Check(values["/x~1y~0z"] == "Carter" && lexical.Fields.Single(f => f.Id == "/Customers/1/FirstName").Name == "/Customers/*/FirstName",
+    "JSON Pointer escapes keep exact instance and wildcard paths");
+Check(values["/Customers/0/FirstName"] == "Emily", "an escaped string is decoded");
+values["/Customers/0/FirstName"] = "[PASSENGER_NAME_WITH_LONGER_TEXT]";
+byte[] changed = codec.Serialize(lexical, values);
+codec.Validate(lexical, changed);
+Check(Encoding.UTF8.GetString(changed).Contains("1e+02", StringComparison.Ordinal) && Encoding.UTF8.GetString(changed).Contains("\"Optional\":null", StringComparison.Ordinal),
+    "a longer string keeps the numeric spelling and the null");
+Reject(() => codec.Validate(lexical, Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(changed).Replace("1e+02", "100", StringComparison.Ordinal))), "an outside numeric spelling change");
+Reject(() => codec.Validate(lexical, Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(changed).Replace("\"Empty\":[]", "\"Empty\":[{}]", StringComparison.Ordinal))), "an outside empty-container change");
+values["/Count"] = "100";
+Reject(() => codec.Serialize(lexical, values), "a non-string replacement");
+values["/Count"] = "1e+02";
+values.Remove("/Customers/0/FirstName");
+Reject(() => codec.Serialize(lexical, values), "a missing protection field");
+values["unknown"] = "extra";
+Reject(() => codec.Serialize(lexical, values), "a substituted field ID with a matching count");
+values.Remove("unknown");
+values["/Customers/0/FirstName"] = null!;
+Reject(() => codec.Serialize(lexical, values), "a null replacement, which is not a JSON null");
+Reject(() => Parse("{\"x\":\"a\",\"x\":\"b\"}"), "a duplicate property");
+Reject(() => Parse("{\"x\":\"a\",\"\\u0078\":\"b\"}"), "an escaped duplicate property");
+Reject(() => Parse("{\"*\":\"ambiguous\"}"), "a wildcard property name");
+Reject(() => Parse("{\"FirstName\":\"unfinished"), "truncated JSON");
+Reject(() => Parse("[{\"x\":\"y\"}]"), "an array root, which is not the Seats object root");
+Reject(() => Parse("{\"x\":\"y\"} {}"), "trailing JSON");
+Reject(() => Parse("{}"), "JSON without scalars");
+// 1 is the former PNR route value: a delivery for another route is refused by the Seats codec.
+Reject(() => codec.Parse(new FeedMessage(new FeedDelivery((FeedType)1, Guid.Empty, "fixture.bin", "fixture"), Encoding.UTF8.GetBytes("{\"x\":\"y\"}"))), "a delivery for another route");
+Reject(() => codec.Serialize(new ParsedFeed(lexical.Fields, new object()), lexical.Fields.ToDictionary(f => f.Id, f => f.Value)), "a layout from another codec");
+string export = "A VER 2\r\nA ENC 546\r\nA CCS 1208\r\nA MSI DEMO\r\nX " + Convert.ToHexString(Encoding.UTF8.GetBytes("{\"FirstName\":\"Emily\"}"));
+var exported = codec.Parse(Message(Encoding.UTF8.GetBytes(export), "fixture.txt"));
+byte[] rebuilt = codec.Serialize(exported, exported.Fields.ToDictionary(field => field.Id, field => "*****"));
+codec.Validate(exported, rebuilt);
+Check(Encoding.UTF8.GetString(rebuilt).StartsWith("A VER 2\r\nA ENC 546\r\nA CCS 1208\r\nA MSI DEMO\r\nX ", StringComparison.Ordinal) && rebuilt[^1] != '\n',
+    "MQ CRLF and an absent final newline are kept during protection");
+Reject(() => codec.Validate(exported, Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(rebuilt).Replace("A VER 2", "A VER 3", StringComparison.Ordinal))), "an MQ header change");
+Reject(() => codec.Parse(Message(Encoding.UTF8.GetBytes(export.Replace("1208", "437", StringComparison.Ordinal)), "fixture.txt")), "an unsupported JSON CCSID");
+
+Console.WriteLine($"PASS Generic JSON codec checks complete | {samples.Length} files | {compared} baseline locations | {checks} checks");
+
+// Returns the protection a recognizer key gives a string, as the protector applies it; every other value is unchanged.
+static string ByKey(RecognizerFile file, FeedField field, IReadOnlySet<string> strings)
 {
-    Reject(() => XdrTextScanner.Scan(Counted(ebcdic.GetBytes(text))), "EBCDIC text: " + text.Length + " characters");
+    if (!strings.Contains(field.Id) || field.Value.Length == 0)
+    {
+        return field.Value;
+    }
+    var recognizer = field.Name.Split('/').Where(s => s.Length > 0 && s != "*").Reverse().Select(file.RecognizerForKey).FirstOrDefault(r => r is not null);
+    return recognizer is null ? field.Value : FeedAnonymizer.Apply(file.ActionFor(recognizer.Entity).Action, recognizer.Entity, field.Value).Text;
 }
-// A length word announcing printable text that is too long or runs past the payload fails closed (review R-002).
-Reject(() => XdrTextScanner.Scan([0, 1, 0, 0, .. Encoding.ASCII.GetBytes("MILLER/JORDAN MR 0000")]), "a counted string longer than 65535 bytes");
-Reject(() => XdrTextScanner.Scan([0, 0, 0, 100, .. Encoding.ASCII.GetBytes("MILLER/JORDAN MR")]), "a counted string that runs past the payload");
-// A large integer followed by a real counted string is not oversized text.
-Check(XdrTextScanner.Scan([0, 1, 0, 0, 0, 0, 0, 4, 0x44, 0x45, 0x4E, 0x31]).Count == 1, "a large integer before a real string stays raw words");
-Check(XdrTextScanner.Scan([0, 0, 0, 100, 0, 0, 0, 7]).Count == 0, "a length past the payload without text stays raw words");
 
-Console.WriteLine($"PASS Generic XDR codec checks complete | {samples.Length} samples | {compared} candidates");
+// Returns the JSON property name of a wildcard field path: its last segment that is not an array position.
+static string Key(string name) => name.Split('/').LastOrDefault(s => s.Length > 0 && s != "*") ?? "";
 
-static byte[] envelopeOf(FeedMessage message) => FeedPayloadReader.Read(message).Payload;
+static int CountStrings(JsonElement element) => element.ValueKind switch
+{
+    JsonValueKind.Object => element.EnumerateObject().Sum(property => CountStrings(property.Value)),
+    JsonValueKind.Array => element.EnumerateArray().Sum(CountStrings),
+    JsonValueKind.String => 1,
+    _ => 0
+};
 
-// An XDR counted string: big-endian length, the bytes, zero padding to a word boundary.
-static byte[] Counted(byte[] text) =>
-    [(byte)(text.Length >> 24), (byte)(text.Length >> 16), (byte)(text.Length >> 8), (byte)text.Length, .. text, .. new byte[XdrTextScanner.Padded(text.Length) - text.Length]];
+static FeedMessage Message(byte[] bytes, string name = "fixture.bin") => new(new(FeedType.Seats, Guid.Empty, name, "fixture"), bytes);
 
-// A short counted string: its length word sits just before the value and equals the value length (1-3 characters).
-static bool IsShortString(byte[] payload, int offset, int length) =>
-    offset >= 4 && System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(payload.AsSpan(offset - 4, 4)) == (uint)length;
+// This reader uses the independent DOM API and has no dependency on the production JSON span code.
+static IReadOnlyList<FeedField> Independent(byte[] payload)
+{
+    using (var document = JsonDocument.Parse(payload))
+    {
+        var fields = new List<FeedField>();
+        Walk(document.RootElement, "", "");
+        return fields;
 
-static void Check(bool condition, string label)
+        void Walk(JsonElement element, string id, string policy)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in element.EnumerateObject())
+                {
+                    string name = property.Name.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
+                    Walk(property.Value, id + "/" + name, policy + "/" + name);
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                int index = 0;
+                foreach (var child in element.EnumerateArray())
+                {
+                    Walk(child, id + "/" + index++, policy + "/*");
+                }
+            }
+            else
+            {
+                string value = element.ValueKind == JsonValueKind.String ? element.GetString()! :
+                    element.ValueKind == JsonValueKind.Null ? "" : element.GetRawText();
+                fields.Add(new(id, policy, value));
+            }
+        }
+    }
+}
+
+void Check(bool condition, string label)
 {
     if (!condition)
     {
         throw new Exception(label);
     }
+    checks++;
 }
 
-static void Reject(Action action, string label)
+void Reject(Action action, string label)
 {
     try
     {
@@ -137,6 +228,7 @@ static void Reject(Action action, string label)
     }
     catch (InvalidDataException)
     {
+        checks++;
         return;
     }
     throw new Exception("Expected rejection: " + label);

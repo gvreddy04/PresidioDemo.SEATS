@@ -17,21 +17,21 @@ static class FeedTransactionLogChecks
     public static void Run()
     {
         {
-            var delivery = new FeedDelivery(FeedType.PNR, Guid.NewGuid(), "same-name.bin", "fixture");
-            // A fictional binary string and its same-width mask, as the PNR feed protects it.
-            var input = new FeedMessage(delivery, Encoding.ASCII.GetBytes("MILLER/JORDAN"));
-            var result = new FeedWorkflowResult(Encoding.ASCII.GetBytes("######/######"),
-                [new("0", "0", "MILLER/JORDAN", 0)], [new("0", "0", "######/######", 0)]);
+            var delivery = new FeedDelivery(FeedType.Seats, Guid.NewGuid(), "same-name.bin", "fixture");
+            // A fictional JSON string and its same-width mask, as the Seats feed protects it.
+            var input = new FeedMessage(delivery, Encoding.UTF8.GetBytes("{\"Name\":\"Emily Carter\"}"));
+            var result = new FeedWorkflowResult(Encoding.UTF8.GetBytes("{\"Name\":\"************\"}"),
+                [new("/Name", "/Name", "Emily Carter")], [new("/Name", "/Name", "************")]);
             // The harness passes the values-mode detection block; a fictional one is enough to check its place.
-            string block = "PNR 0 DETECTION PUBLISHED file=- fields=1 pii=1 non-pii=0 review=0" + Environment.NewLine + "  PII fields (changed)" + Environment.NewLine
-                + "    slot 0 @0x0000  \"MILLER/JORDAN\" -> \"######/######\"  recognizer=passengerName entity=PERSON score=0.90 operator=mask decision=changed" + Environment.NewLine;
+            string block = "Seats 0 DETECTION PUBLISHED file=- fields=1 pii=1 non-pii=0 review=0" + Environment.NewLine + "  PII fields (changed)" + Environment.NewLine
+                + "    \"/Name\"  \"Emily Carter\" -> \"************\"  recognizer=SpacyRecognizer entity=PERSON score=0.85 operator=mask decision=changed" + Environment.NewLine;
             string text = FeedLoggers.Format(input, result, null, block);
             string[] sections = text.Split("AFTER ANONYMIZATION");
-            Require(sections.Length == 2 && sections[0].Contains("MILLER/JORDAN") && !sections[1].Contains("MILLER/JORDAN") && sections[1].Contains("######/######"), "Comparison sections mix original and protected data.");
+            Require(sections.Length == 2 && sections[0].Contains("Emily Carter") && !sections[1].Contains("Emily Carter") && sections[1].Contains("************"), "Comparison sections mix original and protected data.");
             Require(text.Contains("BEFORE ANONYMIZATION") && text.Contains(new string('=', 72)), "Missing headings or separators.");
             Require(sections[0].Contains(Encoding.UTF8.GetString(input.Content.Span)) && sections[1].Contains(Encoding.UTF8.GetString(result.Content.Span)), "Complete payload data is missing.");
             RequireOrder(text, "BEFORE ANONYMIZATION", "Complete feed data", Encoding.UTF8.GetString(input.Content.Span),
-                "Plain text:", Encoding.UTF8.GetString(input.Content.Span), "Detection (binary offsets count from the start of the payload shown above):", block, "AFTER ANONYMIZATION", "Complete feed data", Encoding.UTF8.GetString(result.Content.Span));
+                "Plain text:", Encoding.UTF8.GetString(input.Content.Span), "Detection (each JSON Pointer locates a string in the payload shown above):", block, "AFTER ANONYMIZATION", "Complete feed data", Encoding.UTF8.GetString(result.Content.Span));
             Require(!sections[1].Contains("DETECTION") && !sections[1].Contains("Plain text:"), "After section includes an unrequested view.");
             Require(!text.Contains("Parsed fields"), "The detection block replaces the parsed field list.");
             Require(!FeedLoggers.Format(input, result, null).Contains("Detection ("), "Without a block there is no detection section.");
@@ -56,8 +56,8 @@ static class FeedTransactionLogChecks
                 $"Complete feed data ({Encoding.UTF8.GetByteCount(protectedExport)} bytes):", protectedExport);
             string[] mqSections = mqLog.Split("AFTER ANONYMIZATION");
             string plainText = mqSections[0].Split("Plain text:")[1].Split("Detection (")[0];
-            Require(plainText.Contains("MILLER/JORDAN") && !plainText.Contains("A VER") && !plainText.Contains("Hex dump"), "Plain text must show the decoded payload without envelope or hex-dump formatting.");
-            Require(mqSections[0].Split("Complete feed data").Length == 2 && mqSections[1].Split("Complete feed data").Length == 2 && !mqSections[1].Contains("DETECTION") && !mqSections[1].Contains("MILLER/JORDAN"), "MQ sections duplicate complete data or mix original and protected values.");
+            Require(plainText.Contains("Emily Carter") && !plainText.Contains("A VER") && !plainText.Contains("Hex dump"), "Plain text must show the decoded payload without envelope or hex-dump formatting.");
+            Require(mqSections[0].Split("Complete feed data").Length == 2 && mqSections[1].Split("Complete feed data").Length == 2 && !mqSections[1].Contains("DETECTION") && !mqSections[1].Contains("Emily Carter"), "MQ sections duplicate complete data or mix original and protected values.");
             string binaryLog = FeedTransactionLog.Format(input with { Content = binary }, result with { Content = new byte[] { 0, 255, 42 } }, null, block);
             RequireOrder(binaryLog, "BEFORE ANONYMIZATION", "Complete feed data", "Hex dump", "Detection (",
                 "AFTER ANONYMIZATION", "Complete feed data", "Hex dump", "00 FF 2A");
@@ -65,7 +65,7 @@ static class FeedTransactionLogChecks
             string readableExport = export[..export.IndexOf("X ", StringComparison.Ordinal)] + "X " + Convert.ToHexString(readableBinary) + "\n";
             string readableLog = FeedTransactionLog.Format(input with { Delivery = delivery with { OriginalName = "binary.txt" }, Content = Encoding.UTF8.GetBytes(readableExport) }, null, "Test rejection.");
             RequireOrder(readableLog, "Decoded MQ payload", "Hex dump", "Plain text:", "  A long passenger name spanning hex rows | José\nNext\tfield ", "AFTER ANONYMIZATION");
-            Console.WriteLine("PASS transaction logs follow workflow order for text, binary, MQ and rejected input, and separate original/protected data");
+            Console.WriteLine("PASS transaction logs follow workflow order for JSON, binary, MQ and rejected input, and separate original/protected data");
         }
     }
 

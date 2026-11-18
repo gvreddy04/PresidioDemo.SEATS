@@ -22,7 +22,7 @@ public sealed record SampleResult(string Path, FeedType Feed, byte[] Original, b
 #endregion
 
 /// <summary>
-/// Runs samples through the decoded-text path: generic codec, recognizer sets, detecting protector, rebuild, validate.
+/// Runs samples through the decoded-text path: JSON codec, recognizer file, detecting protector, rebuild, validate.
 /// </summary>
 public static class DetectionRun
 {
@@ -33,7 +33,7 @@ public static class DetectionRun
     /// Returns the decoded-text codec of a feed.
     /// </summary>
     /// <param name="feed">The feed route.</param>
-    /// <returns>The generic XDR codec.</returns>
+    /// <returns>The shared JSON codec of the feed.</returns>
     public static IFeedCodec Codec(FeedType feed) => FeedCodecRegistry.Create(feed);
 
     /// <summary>

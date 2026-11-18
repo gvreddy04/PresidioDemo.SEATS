@@ -6,7 +6,7 @@ import tempfile
 
 PROJECT = Path(__file__).resolve().parents[2]
 HARNESS = PROJECT / "tests" / "FeedPipelineHarness" / "bin" / "Debug" / "net10.0" / "FeedPipelineHarness.dll"
-FEEDS = ["PNR"]
+FEEDS = ["Seats"]
 RUNS = PROJECT / ".test-runs"
 
 
@@ -71,7 +71,7 @@ class HarnessResult:
 
 
 def run(inputs, extra_args=(), expect=None, prefix="harness-"):
-    """Write inputs ({"PNR/a.txt": bytes}) into a fresh folder, run the harness once and return its result."""
+    """Write inputs ({"Seats/a.txt": bytes}) into a fresh folder, run the harness once and return its result."""
     if not HARNESS.is_file():
         raise AssertionError("Build tests/FeedPipelineHarness first; missing " + str(HARNESS))
     RUNS.mkdir(exist_ok=True)

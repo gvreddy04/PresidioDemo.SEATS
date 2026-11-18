@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Generic XDR codec checks: scanner versus schema strings, round trips and fail-closed validation. -->
+  <!-- Generic JSON codec checks: an independent reader versus the codec, baseline locations, round trips and fail-closed validation. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

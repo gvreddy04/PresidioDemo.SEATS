@@ -10,5 +10,6 @@
     <ProjectReference Include="../PresidioDemo.Messaging.Testing/PresidioDemo.Messaging.Testing.csproj" />
     <Compile Include="../FeedRoundTripChecks/NoAnonymizationRoundTripChecks.cs" Link="NoAnonymizationRoundTripChecks.cs" />
     <Compile Include="../FeedRoundTripChecks/RoundTripExamples.cs" Link="RoundTripExamples.cs" />
+    <Compile Include="../FeedRoundTripChecks/JsonRoundTripExamples.cs" Link="JsonRoundTripExamples.cs" />
   </ItemGroup>
 </Project>
