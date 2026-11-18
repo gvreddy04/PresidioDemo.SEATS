@@ -32,11 +32,24 @@ Counts below describe JSON scalar occurrences under the removed field policies, 
 | SEATS_03.txt | 1,329 | 32 | 19 Replace |
 | SEATS_02_Negative_Testing.txt | 1,362 | Rejected | MQ export without UTF-8 CCSID 1208 |
 
-With decoded-text detection, `SEATS.txt` and `SEATS_03.txt` are published through the real worker and local Presidio, and `SEATS_02_Negative_Testing.txt` is dead-lettered with the same reason. All 48 values the former field policies protected (names, passenger and order IDs, the employee ID and the seat attribute codes) are protected by the recognizer keys of `seats.xml`, so there are no approved exceptions. Both PNR occurrences stay unchanged, under the allowed `UARecloc` key. `SEATS.txt` has 29 changed and 29 allowed strings, `SEATS_03.txt` 19 and 31; the extra kept occurrence of the removed design is the number `OrderVersion`, which is not a string. Source hashes, payload sizes, numbers, property names, grouping, MQ headers, row framing and newline style are preserved.
+With decoded-text detection, `SEATS.txt` and `SEATS_03.txt` are published through the real worker and local Presidio, and `SEATS_02_Negative_Testing.txt` is dead-lettered with the same reason. All 48 values the former field policies protected (names, passenger and order IDs, the employee ID and the seat attribute codes) are protected by the `<entity_mapping>` keys of `seats.xml`, so there are no approved exceptions. Both PNR occurrences stay unchanged, under the skipped `UARecloc` key. `SEATS.txt` has 29 changed and 29 allowed strings, `SEATS_03.txt` 19 and 31; the extra kept occurrence of the removed design is the number `OrderVersion`, which is not a string. Source hashes, payload sizes, numbers, property names, grouping, MQ headers, row framing and newline style are preserved.
 
 ## Configuration behavior (removed design)
 
-The removed design kept the Seats policy inline in `feed-policies.xml`, with one exact JSON path per scalar and a Keep or Replace action; every populated scalar needed a configured rule, and an unknown path rejected the complete message. The recognizer file that replaced it, `seats.xml`, decides by property name instead: recognizer keys for the personal-data properties, allow-list keys for the operational ones, and Presidio for any string under a property it does not name.
+The removed design kept the Seats policy inline in `feed-policies.xml`, with one exact JSON path per scalar and a Keep or Replace action; every populated scalar needed a configured rule, and an unknown path rejected the complete message. The recognizer file that replaced it, `seats.xml`, decides by property name instead, in the same format as the PNR-Linking worker.
+
+## Protection with `seats.xml`
+
+Each string is decided on its own, in this order:
+
+| Step | Recognizer file element | Example keys | Result |
+| --- | --- | --- | --- |
+| 1 | `<entity_mapping>` | `FirstName`, `LastName`, `MiddleName`, `BookedAsName`, `PaxId`, `OrderId`, `EmpId`, `Attributes`, `IATAAttributes`, `TTYAttributes` | The whole string is the mapped entity and gets that entity's anonymizer. All of these mask with `*` at the same width. |
+| 2 | `<keys_to_skip>` | `UARecloc`, `pnr`, seat number, cabin and booking class, service and flight references, timestamps, status, channel and agent | The string is published unchanged without analysis. The record locator links the booking, so it stays unchanged. |
+| 3 | `<allow_list>` | none: the item is a timestamp shape | A string that matches an item end to end is published unchanged. |
+| 4 | Presidio | any key the file does not name | Local Presidio analyzes the string. The property names of its key path are passed as Presidio context words, as Presidio's own `analyze_dict` passes a key. Each span at or above the threshold gets its entity's anonymizer; a string with nothing detected is published unchanged and listed for review. |
+
+A key is matched ignoring case, anywhere on the key path. The innermost mapped name wins. A number or boolean under a mapped key cannot be protected in its JSON type, so the message is dead-lettered (WR-016). In the supplied samples every string is decided in step 1 or 2.
 
 ## Reviewed field names
 
@@ -49,7 +62,7 @@ JSON property paths are unchanged from the producer.
 | `OrderId` | `ORDER_ID` | The order the event belongs to |
 | `EmpId` | `EMPLOYEE_ID` | The employee or service account that made the change |
 | `Attributes`, `IATAAttributes`, `TTYAttributes` | `SENSITIVE_ATTRIBUTE` | Seat and passenger attribute codes, some of which describe health, age or custody; every value of the array |
-| `UARecloc` | allowed | The record locator (PNR), published unchanged; `pnr` is allowed for the same reason |
+| `UARecloc` | skipped | The record locator (PNR), published unchanged; `pnr` is skipped for the same reason |
 
 ## Reproduce verification
 

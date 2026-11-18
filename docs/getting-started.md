@@ -204,13 +204,13 @@ if ($failed.Count -eq 0) { Write-Host "All .NET checks passed." -ForegroundColor
 **You should see:** `All .NET checks passed.` `Messaging.ContractTests` prints `SKIP Solace contract ...` here; it
 runs against the broker in step 20.
 
-**Python unit tests** (44 tests, about 1–2 minutes; they load Presidio):
+**Python unit tests** (46 tests, about 1–2 minutes; they load Presidio):
 
 ```powershell
 src\.venv\Scripts\python -m unittest discover -s tests/unit-tests
 ```
 
-**You should see:** `Ran 44 tests` and `OK`.
+**You should see:** `Ran 46 tests` and `OK`.
 
 **End-to-end sample check.** This sends the three files in `docs/sample-docs/Seats` through the real feed worker and
 embedded Presidio, over the in-memory broker:
@@ -481,7 +481,7 @@ warn: ...Worker.Seats[0] Seats 19de...bb49 DEAD-LETTERED to queue:q.seats.dlq | 
 ```
 
 The worker treats a Try-Me message as a **raw** payload, because Try-Me sends no `presidio-payload-format` header.
-`{"PaxId":1001}` is valid JSON, but `PaxId` is a personal-data key and a number cannot be masked in its JSON type, so
+`{"PaxId":1001}` is valid JSON, but `PaxId` is an `<entity_mapping>` key and a number cannot be masked in its JSON type, so
 it is rejected. A message such as `{"hello":"world"}` would be published, because nothing in it is detected. If
 Try-Me is consuming `q.seats.dlq`
 (step 18), the rejected message appears there straight away.
@@ -552,8 +552,9 @@ environment's section, then environment variables (`__` separates levels). Set a
 | `$env:Messaging__ConsumersPerTask = "4"` | 4 consumers per input queue (1–32) |
 | `$env:Logging__LogLevel__Default = "Warning"` | Only warnings and errors, such as dead letters |
 
-The feed protection rules are in `src/PresidioDemo.Core/Configuration/recognizers/seats.xml`. The build copies it next
-to the worker.
+The feed protection rules are in `src/PresidioDemo.Core/Configuration/recognizers/seats.xml`: custom recognizers,
+`<entity_mapping>` keys (the whole value is the entity), `<keys_to_skip>` keys (published unchanged), the allow list and
+the anonymizers, in the same format as the PNR-Linking worker. The build copies it next to the worker.
 
 ## Troubleshooting
 
