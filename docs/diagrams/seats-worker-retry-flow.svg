@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
 <title id="title">Seats masking with retry and dead letter queue</title>
-<desc id="desc">The Seats worker in the DemoAir PII service AWS account reads one message from the Seats input queue, masks it with Presidio in the same process, publishes the masked message and acknowledges the input only after the broker confirms. Bad data goes to the Seats dead letter queue at once. A broker outage is retried every 5 seconds without acknowledging. A crash before the ack makes the broker redeliver. After 5 deliveries the worker moves the message to the DLQ, and the broker does so after 10 as a backstop.</desc>
+<desc id="desc">The Seats worker in the DemoAir PII service AWS account reads one message from the Seats input queue, masks its passenger names with Presidio in the same process (other fields, such as an email address, pass unchanged), publishes the masked message and acknowledges the input only after the broker confirms. Bad data goes to the Seats dead letter queue at once. A broker outage is retried every 5 seconds without acknowledging. A crash before the ack makes the broker redeliver. After 5 deliveries the worker moves the message to the DLQ, and the broker does so after 10 as a backstop.</desc>
 <defs>
 <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#444441"/></marker>
 <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#A32D2D"/></marker>
@@ -39,7 +39,7 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <text class="t" x="92" y="172">Seats (PCI clean)</text>
 <text class="m" x="64" y="194">Input queue · raw PII</text>
 <text class="d" x="64" y="218">Seats · PNR K7QX2M</text>
-<text class="d" x="64" y="238">Emily Carter</text>
+<text class="d" x="64" y="238">CARTER/EMILY</text>
 <text class="d" x="64" y="258">emily.carter@example.com</text></g>
 
 <g class="dq"><rect x="50" y="570" width="260" height="130" rx="8"/>
@@ -68,7 +68,7 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <text class="t" x="517" y="264" text-anchor="middle">Receive</text>
 <text class="m" x="517" y="286" text-anchor="middle">one message at a time</text></g>
 <g class="st"><rect x="625" y="230" width="175" height="80" rx="6"/>
-<text class="t" x="712" y="264" text-anchor="middle">Mask PII</text>
+<text class="t" x="712" y="264" text-anchor="middle">Mask passenger names</text>
 <text class="m" x="712" y="286" text-anchor="middle">Presidio in-process</text></g>
 <g class="st"><rect x="820" y="230" width="175" height="80" rx="6"/>
 <text class="t" x="907" y="264" text-anchor="middle">Publish masked</text>
@@ -119,10 +119,10 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <!-- Output side -->
 <g class="cq"><rect x="1290" y="145" width="280" height="130" rx="8"/>
 <use href="#q" x="1304" y="160" width="20" height="14"/>
-<text class="t" x="1332" y="172">Seats (PII &amp; PCI clean)</text>
+<text class="t" x="1332" y="172">Seats (names masked)</text>
 <text class="m" x="1304" y="194">Output queue</text>
 <text class="d" x="1304" y="218">PNR K7QX2M unchanged</text>
-<text class="d" x="1304" y="238">Name and email masked</text></g>
+<text class="d" x="1304" y="238">Names masked, email unchanged</text></g>
 <g class="st"><rect x="1290" y="320" width="280" height="70" rx="8" style="stroke:#534AB7"/>
 <text class="t" x="1430" y="350" text-anchor="middle">Partner core system</text>
 <text class="m" x="1430" y="372" text-anchor="middle">Consumes the masked Seats</text></g>

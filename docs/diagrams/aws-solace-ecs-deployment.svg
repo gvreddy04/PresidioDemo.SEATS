@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1660 686" role="img" aria-labelledby="title desc">
 <title id="title">Processing PII with Presidio: AWS deployment</title>
-<desc id="desc">Harness builds one Docker image for the Seats worker, pushes it to ECR and deploys it as one ECS service. The Seats worker reads the Seats Solace input queue over a native TLS connection with parallel consumers, parses the JSON message, masks PII with Presidio in the same process, and publishes masked messages to the Seats topic, whose output queue serves downstream consumers. Failed messages go to the restricted Seats dead letter queue, with a broker backstop. The service scales automatically.</desc>
+<desc id="desc">Harness builds one Docker image for the Seats worker, pushes it to ECR and deploys it as one ECS service. The Seats worker reads the Seats Solace input queue over a native TLS connection with parallel consumers, parses the JSON message, masks passenger names with Presidio in the same process (other fields pass unchanged), and publishes masked messages to the Seats topic, whose output queue serves downstream consumers. Failed messages go to the restricted Seats dead letter queue, with a broker backstop. The service scales automatically.</desc>
 <defs>
 <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#444441"/></marker>
 <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9z" fill="#A32D2D"/></marker>
@@ -67,12 +67,12 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <use href="#i-cloud" x="536" y="201" width="18" height="18" style="color:#5F5E5A"/>
 <text class="h" x="562" y="216">AWS · ECS Fargate · Seats service</text>
 <g class="st"><rect x="540" y="232" width="110" height="44" rx="6"/><text class="k" x="595" y="250" text-anchor="middle">Receive</text><text class="m" x="595" y="267" text-anchor="middle">1 per consumer</text></g>
-<rect x="676" y="232" width="140" height="44" rx="6" fill="#EEEDFE" stroke="#534AB7"/><text class="k" x="746" y="250" text-anchor="middle">Mask PII</text><text class="m" x="746" y="267" text-anchor="middle">Presidio in-process</text>
-<g class="st"><rect x="842" y="232" width="110" height="44" rx="6"/><text class="k" x="897" y="250" text-anchor="middle">Publish</text><text class="m" x="897" y="267" text-anchor="middle">topic or DLQ</text></g>
-<g class="st"><rect x="978" y="232" width="122" height="44" rx="6"/><text class="k" x="1039" y="250" text-anchor="middle">Ack</text><text class="m" x="1039" y="267" text-anchor="middle">after confirm</text></g>
+<rect x="676" y="232" width="156" height="44" rx="6" fill="#EEEDFE" stroke="#534AB7"/><text class="k" x="754" y="250" text-anchor="middle">Mask passenger names</text><text class="m" x="754" y="267" text-anchor="middle">Presidio in-process</text>
+<g class="st"><rect x="858" y="232" width="110" height="44" rx="6"/><text class="k" x="913" y="250" text-anchor="middle">Publish</text><text class="m" x="913" y="267" text-anchor="middle">topic or DLQ</text></g>
+<g class="st"><rect x="994" y="232" width="110" height="44" rx="6"/><text class="k" x="1049" y="250" text-anchor="middle">Ack</text><text class="m" x="1049" y="267" text-anchor="middle">after confirm</text></g>
 <path class="ln" d="M650 254H674" marker-end="url(#a)"/>
-<path class="ln" d="M816 254H840" marker-end="url(#a)"/>
-<path class="ln" d="M952 254H976" marker-end="url(#a)"/>
+<path class="ln" d="M832 254H856" marker-end="url(#a)"/>
+<path class="ln" d="M968 254H992" marker-end="url(#a)"/>
 <text class="m" x="540" y="298">.NET worker · Python.NET · Presidio · spaCy model · seats.xml</text>
 <text class="m" x="540" y="316">All in-process · no HTTP</text>
 
@@ -132,7 +132,7 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <text class="s" x="440" y="592">Rejected messages go to the Seats DLQ.</text>
 <text class="s" x="440" y="614">The broker moves stuck messages as a backstop.</text>
 <text class="s" x="440" y="636">The DLQ has restricted access.</text>
-<text class="s" x="440" y="658">Raw PII never goes to output.</text>
+<text class="s" x="440" y="658">Rejected input never goes to output.</text>
 
 <text class="t" x="840" y="568">Worker settings</text>
 <text class="s" x="840" y="592">One route: the Seats feed.</text>
